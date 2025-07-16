@@ -1,0 +1,28 @@
+name: Publish
+
+on:
+  push:
+    tags: [ "v*" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions: read-all
+
+jobs:
+  build:
+    uses: ./.github/workflows/checks.yaml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+  publish:
+    needs: build
+    strategy:
+      matrix:
+        crate: [ "nuspec" ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2 # immutable action, safe to use the versions
+      - name: Publish
+        run: |
+          cargo login ${{ secrets.CRATES_IO_TOKEN }}
+          cargo publish --all-features --package ${{ matrix.crate }} --verbose
