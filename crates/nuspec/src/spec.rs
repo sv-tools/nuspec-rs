@@ -1,32 +1,20 @@
+use quick_xml::SeError;
+use quick_xml::se::Serializer;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
-
-/// The namespace URL for the NuGet package specification (nuspec) schema.
-///
-/// Microsoft does not provide a stable URL for the XSD schema, so this URL points to the NuGet.Client repository on GitHub.
-pub const XSD_NAMESPACE: &str = "https://raw.githubusercontent.com/NuGet/NuGet.Client/refs/heads/dev/src/NuGet.Core/NuGet.Packaging/compiler/resources/nuspec.xsd";
 
 /// A representation of a NuGet package specification (nuspec).
 ///
 /// See [NuGet documentation](https://docs.microsoft.com/en-us/nuget/reference/nuspec) for more details.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename = "package")]
 pub struct Package {
     #[serde(rename = "@xmlns", default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
+    #[serde(default)]
     pub metadata: Metadata,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<Files>,
-}
-
-impl Default for Package {
-    fn default() -> Self {
-        Package {
-            namespace: Some(XSD_NAMESPACE.to_string()),
-            metadata: Metadata::default(),
-            files: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -39,21 +27,23 @@ pub struct Metadata {
     /// for guidance.
     ///
     /// When uploading a package to nuget.org, the id field is limited to 128 characters.
+    #[serde(default)]
     pub id: String,
     /// The version of the package, following the major.minor.patch pattern.
     /// Version numbers may include a pre-release suffix as described in [Package versioning](https://learn.microsoft.com/en-us/nuget/concepts/package-versioning#pre-release-versions).
     ///
     /// When uploading a package to nuget.org, the version field is limited to 64 characters.
+    #[serde(default)]
     pub version: String,
     /// A description of the package for UI display.
     ///
     /// When uploading a package to nuget.org, the description field is limited to 4000 characters.
-    #[serde(alias = "summary")]
+    #[serde(default, alias = "summary")]
     pub description: String,
     /// A comma-separated list of package authors. The authors and the owners from the nuspec are
     /// ignored when uploading the package to nuget.org.
     /// For setting package ownership on nuget.org, see [Managing package owners on nuget.org](https://learn.microsoft.com/en-us/nuget/nuget-org/publish-a-package#managing-package-owners-on-nugetorg).
-    #[serde(alias = "owners", with = "comma_separated")]
+    #[serde(default, alias = "owners", with = "comma_separated")]
     pub authors: Vec<String>,
 
     /// A URL for the package's home page, often shown in UI displays as well as nuget.org.
@@ -234,22 +224,23 @@ pub struct Metadata {
     /// Similarly, a package using the contentFiles element should set minClientVersion to "3.3".
     /// Note also that because NuGet clients prior to 2.5 do not recognize this flag,
     /// they always refuse to install the package no matter what minClientVersion contains.
-    //l
-    // <?xml version="1.0" encoding="utf-8"?>
-    // <package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
-    //     <metadata minClientVersion="100.0.0.1">
-    //         <id>dasdas</id>
-    //         <version>2.0.0</version>
-    //         <title />
-    //         <authors>dsadas</authors>
-    //         <owners />
-    //         <requireLicenseAcceptance>false</requireLicenseAcceptance>
-    //         <description>My package description.</description>
-    //     </metadata>
-    //     <files>
-    //         <file src="content\one.txt" target="content\one.txt" />
-    //     </files>
-    // </package>
+    ///
+    /// ```xml
+    /// <?xml version="1.0" encoding="utf-8"?>
+    /// <package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+    ///     <metadata minClientVersion="100.0.0.1">
+    ///         <id>dasdas</id>
+    ///         <version>2.0.0</version>
+    ///         <title />
+    ///         <authors>dsadas</authors>
+    ///         <owners />
+    ///         <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    ///         <description>My package description.</description>
+    ///     </metadata>
+    ///     <files>
+    ///         <file src="content\one.txt" target="content\one.txt" />
+    ///     </files>
+    /// </package>
     /// ```
     #[serde(rename = "@minClientVersion", skip_serializing_if = "Option::is_none")]
     pub min_client_version: Option<String>,
@@ -300,7 +291,7 @@ pub enum License {
     File(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Repository {
     /// The type of the repository, such as "git", "svn", etc.
     #[serde(rename = "@type", skip_serializing_if = "Option::is_none")]
@@ -459,7 +450,7 @@ pub struct ReferenceGroup {
     pub reference: Vec<Reference>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ContentFiles {
     /// A collection of content files for the package.
     #[serde(rename = "files")]
@@ -519,7 +510,7 @@ pub struct Files {
     pub file: Vec<File>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct File {
     /// The location of the file or files to include, subject to exclusions specified by
     /// the exclude attribute.
@@ -716,6 +707,23 @@ mod optional_semicolon_separated {
     }
 }
 
+/// Serializes a value to xml format with indentation.
+// TODO: create a PR to quick-xml to support indentation
+pub fn to_string_indent<T>(
+    value: &T,
+    indent_char: char,
+    indent_size: usize,
+) -> Result<String, SeError>
+where
+    T: ?Sized + Serialize,
+{
+    let mut writer = String::new();
+    let mut serializer = Serializer::new(&mut writer);
+    serializer.indent(indent_char, indent_size);
+    value.serialize(serializer)?;
+    Ok(writer)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -736,9 +744,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            format!(
-                r#"<package xmlns="{XSD_NAMESPACE}"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors></metadata></package>"#
-            )
+            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -781,9 +787,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            format!(
-                r#"<package xmlns="{XSD_NAMESPACE}"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><license type="expression">MIT</license></metadata></package>"#
-            )
+            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><license type="expression">MIT</license></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -804,9 +808,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            format!(
-                r#"<package xmlns="{XSD_NAMESPACE}"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><license type="file">LICENSE-MIT</license></metadata></package>"#
-            )
+            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><license type="file">LICENSE-MIT</license></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -830,9 +832,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            format!(
-                r#"<package xmlns="{XSD_NAMESPACE}"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><tags>tag1 tag2</tags></metadata></package>"#
-            )
+            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><tags>tag1 tag2</tags></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -853,9 +853,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            format!(
-                r#"<package xmlns="{XSD_NAMESPACE}"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><tags/></metadata></package>"#
-            )
+            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><tags/></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -902,9 +900,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            format!(
-                r#"<package xmlns="{XSD_NAMESPACE}"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><packageTypes><packageType name="Dependency" version="1.0"/><packageType name="DotnetTool"/><packageType name="MSBuildSdk"/><packageType name="Template"/><packageType name="ContosoExtension"/></packageTypes></metadata></package>"#
-            )
+            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><packageTypes><packageType name="Dependency" version="1.0"/><packageType name="DotnetTool"/><packageType name="MSBuildSdk"/><packageType name="Template"/><packageType name="ContosoExtension"/></packageTypes></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -941,9 +937,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            format!(
-                r#"<package xmlns="{XSD_NAMESPACE}"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors></metadata><files><file src="content/one.txt" target="content/one.txt"/><file src="content/two.txt" target="content/two.txt" exclude="*.tmp;*.bak"/></files></package>"#
-            )
+            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors></metadata><files><file src="content/one.txt" target="content/one.txt"/><file src="content/two.txt" target="content/two.txt" exclude="*.tmp;*.bak"/></files></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -983,9 +977,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            format!(
-                r#"<package xmlns="{XSD_NAMESPACE}"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><dependencies><dependency id="SomeDependency" version="1.2.3" include="runtime,compile" exclude="build"/><dependency id="AnotherDependency" version="[2.0,3.0)"/></dependencies></metadata></package>"#
-            )
+            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><dependencies><dependency id="SomeDependency" version="1.2.3" include="runtime,compile" exclude="build"/><dependency id="AnotherDependency" version="[2.0,3.0)"/></dependencies></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -1046,9 +1038,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            format!(
-                r#"<package xmlns="{XSD_NAMESPACE}"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><dependencies><group targetFramework="netstandard2.0"><dependency id="SomeDependency" version="1.2.3" include="runtime,compile" exclude="build"/><dependency id="AnotherDependency" version="[2.0,3.0)"/></group><group targetFramework="net5.0"><dependency id="YetAnotherDependency" version="4.5.6" include="runtime"/></group><group><dependency id="NoTargetFrameworkDependency" version="0.1.0"/></group></dependencies></metadata></package>"#
-            )
+            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><dependencies><group targetFramework="netstandard2.0"><dependency id="SomeDependency" version="1.2.3" include="runtime,compile" exclude="build"/><dependency id="AnotherDependency" version="[2.0,3.0)"/></group><group targetFramework="net5.0"><dependency id="YetAnotherDependency" version="4.5.6" include="runtime"/></group><group><dependency id="NoTargetFrameworkDependency" version="0.1.0"/></group></dependencies></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -1083,9 +1073,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            format!(
-                r#"<package xmlns="{XSD_NAMESPACE}"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><frameworkAssemblies><frameworkAssembly assemblyName="System.Xml" targetFramework="netstandard2.0"/><frameworkAssembly assemblyName="Newtonsoft.Json"/></frameworkAssemblies></metadata></package>"#
-            )
+            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><frameworkAssemblies><frameworkAssembly assemblyName="System.Xml" targetFramework="netstandard2.0"/><frameworkAssembly assemblyName="Newtonsoft.Json"/></frameworkAssemblies></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -1119,9 +1107,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            format!(
-                r#"<package xmlns="{XSD_NAMESPACE}"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><references><reference file="SomeAssembly.dll"/><reference file="AnotherAssembly.dll"/></references></metadata></package>"#
-            )
+            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><references><reference file="SomeAssembly.dll"/><reference file="AnotherAssembly.dll"/></references></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -1158,9 +1144,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            format!(
-                r#"<package xmlns="{XSD_NAMESPACE}"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><references><group targetFramework="netstandard2.0"><reference file="NetStandardAssembly.dll"/></group><group targetFramework="net5.0"><reference file="Net5Assembly.dll"/></group></references></metadata></package>"#
-            )
+            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><references><group targetFramework="netstandard2.0"><reference file="NetStandardAssembly.dll"/></group><group targetFramework="net5.0"><reference file="Net5Assembly.dll"/></group></references></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -1200,9 +1184,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            format!(
-                r#"<package xmlns="{XSD_NAMESPACE}"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><contentFiles><files include="contentFiles/one.txt" buildAction="Content" copyToOutput="true" flatten="false"/><files include="contentFiles/two.txt" exclude="*.tmp;*.bak" buildAction="Compile"/></contentFiles></metadata></package>"#
-            )
+            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><contentFiles><files include="contentFiles/one.txt" buildAction="Content" copyToOutput="true" flatten="false"/><files include="contentFiles/two.txt" exclude="*.tmp;*.bak" buildAction="Compile"/></contentFiles></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
