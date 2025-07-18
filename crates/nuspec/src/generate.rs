@@ -82,9 +82,10 @@ enum ManifestCrateType {
 
 fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error>> {
     let manifest_file = PathBuf::from(env::var("CARGO_MANIFEST_PATH")?);
-    let manifest_content = std::fs::read_to_string(manifest_file)?;
+    let manifest_content = fs::read_to_string(manifest_file)?;
     let manifest: Manifest = toml::from_str(&manifest_content)?;
     let build_artifacts_path = get_build_artifacts_path()?;
+    let mut files = vec![];
 
     let mut pkg = manifest
         .package
@@ -140,7 +141,17 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                 if path.is_empty() {
                     None
                 } else {
-                    Some(License::File(get_relative_path(out_dir.clone(), path)?))
+                    let license_path = get_relative_path(out_dir.clone(), path)?;
+                    let license_file_name = Path::new(&license_path).file_name().ok_or(format!(
+                        "Failed to get the file name from the license: {license_path}"
+                    ))?;
+                    let docs_license = Path::new("docs").join(license_file_name);
+                    files.push(File {
+                        src: license_path,
+                        target: Some("docs".to_string()),
+                        ..Default::default()
+                    });
+                    Some(License::File(docs_license.to_string_lossy().to_string()))
                 }
             }
             _ => None,
@@ -161,7 +172,6 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
             _ => None,
         };
     }
-    let mut files = vec![];
     if pkg.metadata.readme.is_none() && pkg.files.is_none() {
         pkg.metadata.readme = match env::var("CARGO_PKG_README") {
             Ok(path) => {
@@ -169,9 +179,9 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                     None
                 } else {
                     let readme_path = get_relative_path(out_dir.clone(), path)?;
-                    let readme_file_name = Path::new(&readme_path)
-                        .file_name()
-                        .ok_or("Failed to get file name from readme")?;
+                    let readme_file_name = Path::new(&readme_path).file_name().ok_or(format!(
+                        "Failed to get the file name from readme: {readme_path}"
+                    ))?;
                     let docs_readme = Path::new("docs").join(readme_file_name);
                     files.push(File {
                         src: readme_path,
