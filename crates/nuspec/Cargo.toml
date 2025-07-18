@@ -1,6 +1,6 @@
 [package]
 name = "nuspec"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -10,6 +10,13 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+default = ["generate"]
+# The `generate` feature is enabled by default, but can be disabled
+# if you want to use the library without generating Nuspec files.
+generate = ["toml"]
+
 [dependencies]
 quick-xml = { version = "0.38.0", features = ["serialize"] }
 serde = { version = "1.0.219", features = ["derive"] }
+toml = { version = "0.9.2", optional = true }

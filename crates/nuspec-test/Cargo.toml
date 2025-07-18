@@ -1,0 +1,26 @@
+[package]
+name = "nuspec-test"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+description = "A test crate for nuspec"
+
+[[bin]]
+name = "nuspec_test_bin_1"
+path = "src/main.rs"
+
+[[bin]]
+name = "nuspec_test_bin_2"
+path = "src/main.rs"
+
+[lib]
+name = "nuspec_test_lib"
+crate-type = ["cdylib", "rlib", "staticlib"]
+
+[build-dependencies]
+nuspec = { path = "../nuspec" }
