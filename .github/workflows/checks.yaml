@@ -115,7 +115,7 @@ jobs:
       - run: cargo build --package ${{ matrix.crate }} --verbose --release
       - run: nuget pack ./target/release/${{ matrix.crate }}.nuspec
   PublishNuget:
-    needs: PublishJob
+    needs: PublishNugetJob
     runs-on: ubuntu-latest
     steps:
       - run: echo "Publishing Passed"
