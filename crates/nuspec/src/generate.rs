@@ -26,7 +26,7 @@ pub fn generate_to(out_dir: PathBuf) -> Result<(), Box<dyn error::Error>> {
         .with_extension("nuspec");
     let serialized = to_string_indent(&pkg, ' ', 2)?;
     let mut file = fs::File::create(file_name)?;
-    file.write_all(r#"<?xml version="1.0" encoding="UTF-8"?>"#.as_bytes())?;
+    file.write_all(r#"<?xml version="1.0" encoding="utf-8"?>"#.as_bytes())?;
     file.write_all(b"\n")?;
     file.write_all(serialized.as_bytes())?;
     Ok(())
