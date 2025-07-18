@@ -103,6 +103,7 @@ jobs:
       matrix:
         crate: [ "nuspec-test" ]
         os: [ "ubuntu-latest", "windows-latest" ]
+      fail-fast: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4.2.2 # immutable action, safe to use the versions
@@ -110,6 +111,8 @@ jobs:
         if: ${{ matrix.os == 'ubuntu-latest' }}
       - uses: NuGet/setup-nuget@323ab0502cd38fdc493335025a96c8fdb0edc71f  # v2.0.1
       - run: cargo build --package ${{ matrix.crate }} --verbose --release
+      - run: ls ./target/release
+      - run: cat ./target/release/${{ matrix.crate }}.nuspec
       - run: nuget pack ./target/release/${{ matrix.crate }}.nuspec
   Publish:
     needs:
