@@ -2,7 +2,7 @@ use crate::{File, Files, License, Package, Repository, to_string_indent};
 use serde::Deserialize;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::{env, error, fs, path};
+use std::{env, error, fs};
 
 /// Generates a NuSpec file based on the Cargo package metadata.
 /// The generated file will be placed in the output directory next to the Cargo build artifacts,
@@ -178,7 +178,7 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                         target: Some("docs".to_string()),
                         ..Default::default()
                     });
-                    Some(docs_readme.to_str().unwrap().to_string())
+                    Some(docs_readme.to_string_lossy().to_string())
                 }
             }
             _ => None,
@@ -190,7 +190,7 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                 let base_name = build_artifacts_path.join(b.name.clone());
                 let relative_path = get_relative_path(
                     out_dir.clone(),
-                    base_name.as_path().to_str().unwrap().to_string(),
+                    base_name.as_path().to_string_lossy().to_string(),
                 )
                 .unwrap_or(b.name.clone());
                 let relative_path = Path::new(&relative_path);
@@ -210,7 +210,7 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                     let base_name = build_artifacts_path.join(name.clone());
                     let relative_path = get_relative_path(
                         out_dir.clone(),
-                        base_name.as_path().to_str().unwrap().to_string(),
+                        base_name.as_path().to_string_lossy().to_string(),
                     )
                     .unwrap_or(name.clone());
                     let relative_path = Path::new(&relative_path);
@@ -227,7 +227,7 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                 #[cfg(not(target_os = "windows"))]
                 {
                     files.push(File {
-                        src: relative_path.to_str().unwrap().to_string(),
+                        src: relative_path.to_string_lossy().to_string(),
                         target: Some("tools".to_string()),
                         ..Default::default()
                     });
@@ -238,7 +238,7 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                 let base_name = build_artifacts_path.join(name.clone());
                 let relative_path = get_relative_path(
                     out_dir.clone(),
-                    base_name.as_path().to_str().unwrap().to_string(),
+                    base_name.as_path().to_string_lossy().to_string(),
                 )
                 .unwrap_or(name.clone());
                 let relative_path = Path::new(&relative_path);
@@ -280,7 +280,7 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                                 #[cfg(not(target_os = "windows"))]
                                 {
                                     files.push(File {
-                                        src: relative_path.to_str().unwrap().to_string(),
+                                        src: relative_path.to_string_lossy().to_string(),
                                         target: Some("tools".to_string()),
                                         ..Default::default()
                                     });
@@ -409,13 +409,14 @@ fn get_build_artifacts_path() -> Result<PathBuf, Box<dyn error::Error>> {
 // finds the relative path from `from_dir` to `to_file` if it is in the same directory tree
 // otherwise returns the absolute path to `to_file`
 fn get_relative_path(from_dir: PathBuf, to_file: String) -> Result<String, Box<dyn error::Error>> {
-    let to_file = path::absolute(to_file)?;
+    let to_file = fs::canonicalize(to_file)?;
+    let from_dir = fs::canonicalize(from_dir)?;
     let mut from_dir_components = from_dir.components();
     let mut to_file_components = to_file.components();
 
     // Check if the `to_file` is in the same directory tree as `from_dir`
     if !from_dir_components.next().eq(&to_file_components.next()) {
-        return Ok(to_file.to_str().unwrap().to_string());
+        return Ok(to_file.to_string_lossy().to_string());
     }
 
     // Skip the common components
@@ -443,5 +444,5 @@ fn get_relative_path(from_dir: PathBuf, to_file: String) -> Result<String, Box<d
         }
     }
 
-    Ok(relative_path.as_path().to_str().unwrap().to_string())
+    Ok(relative_path.as_path().to_string_lossy().to_string())
 }
