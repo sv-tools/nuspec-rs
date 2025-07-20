@@ -24,3 +24,13 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 
 [build-dependencies]
 nuspec = { path = "../nuspec" }
+
+# All fields must be in the camelCase format (same as in the xml file)
+[package.metadata.nuspec.package.metadata]
+requireLicenseAcceptance = false
+
+[[package.metadata.nuspec.package.files.file]]
+src = "../../LICENSE-MIT"
+
+[[package.metadata.nuspec.package.files.file]]
+src = "../../LICENSE-APACHE"
