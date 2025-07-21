@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
   pull_request:
-    branches: ["main"]
+    branches: [ "main" ]
   workflow_call:
     secrets:
       CODECOV_TOKEN:
@@ -87,19 +87,47 @@ jobs:
         run: cargo machete
       - name: Deny
         run: cargo deny check all
-  PublishJob:
+  PublishCrateJob:
     strategy:
       matrix:
-        crate: ["nuspec"]
+        crate: [ "nuspec" ]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4.2.2 # immutable action, safe to use the versions
       - name: Dry run publish
-        run: |
-          cargo publish --all-features --package ${{ matrix.crate }} --dry-run --verbose
-          cargo package --all-features --list --allow-dirty
+        run: cargo publish --all-features --package ${{ matrix.crate }} --dry-run --verbose
+      - name: Create package
+        run: cargo package --all-features --package ${{ matrix.crate }} --verbose
+      - uses: actions/upload-artifact@v4.6.2 # immutable action, safe to use the versions
+        with:
+          name: ${{ matrix.crate }}-crate
+          path: target/package/${{ matrix.crate }}-*.crate
+  PublishNugetJob:
+    strategy:
+      matrix:
+        crate: [ "nuspec-test" ]
+        os: [ "ubuntu-latest", "windows-latest", "macos-latest" ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4.2.2 # immutable action, safe to use the versions
+      - run: sudo apt install mono-devel
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+      - run: brew install mono
+        if: ${{ matrix.os == 'macos-latest' }}
+      - uses: NuGet/setup-nuget@323ab0502cd38fdc493335025a96c8fdb0edc71f  # v2.0.1
+      - run: cargo build --package ${{ matrix.crate }} --verbose --release
+      - run: ls ./target/release
+      - run: cat ./target/release/${{ matrix.crate }}.nuspec
+      - run: nuget pack ./target/release/${{ matrix.crate }}.nuspec
+      - uses: actions/upload-artifact@v4.6.2 # immutable action, safe to use the versions
+        with:
+          name: ${{ matrix.crate }}-${{ matrix.os }}-nuget
+          path: ./${{ matrix.crate }}.*.nupkg
   Publish:
-    needs: PublishJob
+    needs:
+      - PublishNugetJob
+      - PublishCrateJob
     runs-on: ubuntu-latest
     steps:
       - run: echo "Publishing Passed"
