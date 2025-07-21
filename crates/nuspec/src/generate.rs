@@ -345,7 +345,7 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                             push_file(
                                 &mut files,
                                 relative_path
-                                    .with_extension("dylib")
+                                    .with_file_name(format!("lib{name}.dylib"))
                                     .to_string_lossy()
                                     .to_string(),
                                 "lib",
