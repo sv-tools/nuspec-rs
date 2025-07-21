@@ -25,10 +25,11 @@ pub fn generate_to(out_dir: PathBuf) -> Result<(), Box<dyn error::Error>> {
         .join(pkg.metadata.id.clone())
         .with_extension("nuspec");
     let serialized = to_string_indent(&pkg, ' ', 2)?;
-    let mut file = fs::File::create(file_name)?;
+    let mut file = fs::File::create(file_name.clone())?;
     file.write_all(r#"<?xml version="1.0" encoding="utf-8"?>"#.as_bytes())?;
     file.write_all(b"\n")?;
     file.write_all(serialized.as_bytes())?;
+
     Ok(())
 }
 
@@ -47,7 +48,13 @@ struct ManifestPackage {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct ManifestPackageMetadata {
-    pub nuspec: Option<Package>,
+    pub nuspec: Option<ManifestPackageMetadataNuspec>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ManifestPackageMetadataNuspec {
+    pub package: Option<Package>,
+    pub out_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -85,15 +92,36 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
     let manifest_content = fs::read_to_string(manifest_file)?;
     let manifest: Manifest = toml::from_str(&manifest_content)?;
     let build_artifacts_path = get_build_artifacts_path()?;
-    let mut files = vec![];
-
-    let mut pkg = manifest
+    let nuspec_config = manifest
         .package
-        .unwrap_or_default()
-        .metadata
-        .unwrap_or_default()
-        .nuspec
+        .and_then(|p| p.metadata)
+        .and_then(|m| m.nuspec)
         .unwrap_or_default();
+    let out_dir = nuspec_config
+        .out_dir
+        .and_then(|dir| {
+            if dir.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(dir))
+            }
+        })
+        .unwrap_or(out_dir);
+    if !out_dir.exists() {
+        fs::create_dir_all(out_dir.clone())?;
+    }
+    if !out_dir.is_dir() {
+        return Err(format!("The `out_dir` is not a directory: {out_dir:?}").into());
+    }
+    let mut pkg = nuspec_config.package.unwrap_or_default();
+    let mut files = pkg.files.unwrap_or_default().file;
+    for file in files.iter_mut() {
+        let file_path = PathBuf::from(&file.src);
+        if file_path.is_relative() {
+            file.src = get_relative_path(&out_dir, file.src.clone())?;
+        }
+    }
+
     let pkg_name = env::var("CARGO_PKG_NAME")?;
     if pkg.metadata.id.is_empty() {
         pkg.metadata.id = pkg_name.clone();
@@ -141,17 +169,14 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                 if path.is_empty() {
                     None
                 } else {
-                    let license_path = get_relative_path(out_dir.clone(), path)?;
+                    let license_path = get_relative_path(&out_dir, path)?;
                     let license_file_name = Path::new(&license_path).file_name().ok_or(format!(
                         "Failed to get the file name from the license: {license_path}"
                     ))?;
-                    let docs_license = Path::new("docs").join(license_file_name);
-                    files.push(File {
-                        src: license_path,
-                        target: Some("docs".to_string()),
-                        ..Default::default()
-                    });
-                    Some(License::File(docs_license.to_string_lossy().to_string()))
+                    push_file(&mut files, license_path.clone(), "");
+                    Some(License::File(
+                        license_file_name.to_string_lossy().to_string(),
+                    ))
                 }
             }
             _ => None,
@@ -172,233 +197,233 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
             _ => None,
         };
     }
-    if pkg.metadata.readme.is_none() && pkg.files.is_none() {
+    if pkg.metadata.readme.is_none() {
         pkg.metadata.readme = match env::var("CARGO_PKG_README") {
             Ok(path) => {
                 if path.is_empty() {
                     None
                 } else {
-                    let readme_path = get_relative_path(out_dir.clone(), path)?;
+                    let readme_path = get_relative_path(&out_dir, path)?;
                     let readme_file_name = Path::new(&readme_path).file_name().ok_or(format!(
                         "Failed to get the file name from readme: {readme_path}"
                     ))?;
-                    let docs_readme = Path::new("docs").join(readme_file_name);
-                    files.push(File {
-                        src: readme_path,
-                        target: Some("docs".to_string()),
-                        ..Default::default()
-                    });
-                    Some(docs_readme.to_string_lossy().to_string())
+                    push_file(&mut files, readme_path.clone(), "");
+                    Some(readme_file_name.to_string_lossy().to_string())
                 }
             }
             _ => None,
         };
     }
-    if pkg.files.is_none() {
-        pkg.files = {
-            manifest.binary.unwrap_or_default().iter().for_each(|b| {
-                let base_name = build_artifacts_path.join(b.name.clone());
-                let relative_path = get_relative_path(
-                    out_dir.clone(),
-                    base_name.as_path().to_string_lossy().to_string(),
-                )
-                .unwrap_or(b.name.clone());
-                let relative_path = Path::new(&relative_path);
-                #[cfg(target_os = "windows")]
-                {
-                    files.push(File {
-                        src: relative_path
-                            .with_extension("exe")
-                            .to_str()
-                            .unwrap()
-                            .to_string(),
-                        target: Some("tools".to_string()),
-                        ..Default::default()
-                    });
 
-                    let name = b.name.clone().replace("-", "_");
-                    let base_name = build_artifacts_path.join(name.clone());
-                    let relative_path = get_relative_path(
-                        out_dir.clone(),
-                        base_name.as_path().to_string_lossy().to_string(),
-                    )
+    manifest.binary.unwrap_or_default().iter().for_each(|b| {
+        let base_name = build_artifacts_path.join(b.name.clone());
+        let relative_path =
+            get_relative_path(&out_dir, base_name.as_path().to_string_lossy().to_string())
+                .unwrap_or(b.name.clone());
+        let relative_path = Path::new(&relative_path);
+        #[cfg(target_os = "windows")]
+        {
+            push_file(
+                &mut files,
+                relative_path
+                    .with_extension("exe")
+                    .to_string_lossy()
+                    .to_string(),
+                "tools",
+            );
+
+            let name = b.name.clone().replace("-", "_");
+            let base_name = build_artifacts_path.join(name.clone());
+            let relative_path =
+                get_relative_path(&out_dir, base_name.as_path().to_string_lossy().to_string())
                     .unwrap_or(name.clone());
-                    let relative_path = Path::new(&relative_path);
-                    files.push(File {
-                        src: relative_path
-                            .with_extension("pdb")
-                            .to_str()
-                            .unwrap()
-                            .to_string(),
-                        target: Some("tools".to_string()),
-                        ..Default::default()
-                    });
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    files.push(File {
-                        src: relative_path.to_string_lossy().to_string(),
-                        target: Some("tools".to_string()),
-                        ..Default::default()
-                    });
-                }
-            });
-            if let Some(l) = manifest.lib {
-                let name = l.name.unwrap_or(pkg_name.clone().replace("-", "_"));
-                let base_name = build_artifacts_path.join(name.clone());
-                let relative_path = get_relative_path(
-                    out_dir.clone(),
-                    base_name.as_path().to_string_lossy().to_string(),
-                )
+            let relative_path = Path::new(&relative_path);
+            push_file(
+                &mut files,
+                relative_path
+                    .with_extension("pdb")
+                    .to_string_lossy()
+                    .to_string(),
+                "tools",
+            );
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            push_file(
+                &mut files,
+                relative_path.to_string_lossy().to_string(),
+                "tools",
+            );
+        }
+    });
+    if let Some(l) = manifest.lib {
+        let name = l.name.unwrap_or(pkg_name.clone().replace("-", "_"));
+        let base_name = build_artifacts_path.join(name.clone());
+        let relative_path =
+            get_relative_path(&out_dir, base_name.as_path().to_string_lossy().to_string())
                 .unwrap_or(name.clone());
-                let relative_path = Path::new(&relative_path);
-                if l.crate_type.is_none() {
-                    println!(
-                        "cargo:warning=No `crate-type` specified for the `lib` crate, please choose a more specific or configure a files section manually."
-                    );
-                }
-                if let Some(crate_types) = l.crate_type {
-                    if crate_types.is_empty() {
-                        println!(
-                            "cargo:warning=No `crate-type` specified for the `lib` crate, please choose a more specific or configure a files section manually."
-                        );
-                    }
-                    for crate_type in crate_types {
-                        match crate_type {
-                            ManifestCrateType::Bin => {
-                                #[cfg(target_os = "windows")]
-                                {
-                                    files.push(File {
-                                        src: relative_path
-                                            .with_extension("exe")
-                                            .to_str()
-                                            .unwrap()
-                                            .to_string(),
-                                        target: Some("tools".to_string()),
-                                        ..Default::default()
-                                    });
-                                    files.push(File {
-                                        src: relative_path
-                                            .with_extension("pdb")
-                                            .to_str()
-                                            .unwrap()
-                                            .to_string(),
-                                        target: Some("tools".to_string()),
-                                        ..Default::default()
-                                    });
-                                }
-                                #[cfg(not(target_os = "windows"))]
-                                {
-                                    files.push(File {
-                                        src: relative_path.to_string_lossy().to_string(),
-                                        target: Some("tools".to_string()),
-                                        ..Default::default()
-                                    });
-                                }
-                            }
-                            ManifestCrateType::Lib => {
-                                println!(
-                                    "cargo:warning=A `lib` crate-type is not supported, please choose a more specific or configure a files section manually."
-                                );
-                            }
-                            ManifestCrateType::Rlib => {
-                                files.push(File {
-                                    src: relative_path
-                                        .with_file_name(format!("lib{name}.rlib"))
-                                        .to_str()
-                                        .unwrap()
-                                        .to_string(),
-                                    target: Some("lib".to_string()),
-                                    ..Default::default()
-                                });
-                            }
-                            ManifestCrateType::Cdylib | ManifestCrateType::Dylib => {
-                                #[cfg(target_os = "windows")]
-                                {
-                                    files.push(File {
-                                        src: relative_path
-                                            .with_extension("dll")
-                                            .to_str()
-                                            .unwrap()
-                                            .to_string(),
-                                        target: Some("lib".to_string()),
-                                        ..Default::default()
-                                    });
-                                    files.push(File {
-                                        src: relative_path
-                                            .with_extension("pdb")
-                                            .to_str()
-                                            .unwrap()
-                                            .to_string(),
-                                        target: Some("lib".to_string()),
-                                        ..Default::default()
-                                    });
-                                }
-                                #[cfg(target_os = "macos")]
-                                {
-                                    files.push(File {
-                                        src: relative_path
-                                            .with_extension("dylib")
-                                            .to_str()
-                                            .unwrap()
-                                            .to_string(),
-                                        target: Some("lib".to_string()),
-                                        ..Default::default()
-                                    });
-                                }
-                                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-                                {
-                                    files.push(File {
-                                        src: relative_path
-                                            .with_file_name(format!("lib{name}.so"))
-                                            .to_str()
-                                            .unwrap()
-                                            .to_string(),
-                                        target: Some("lib".to_string()),
-                                        ..Default::default()
-                                    });
-                                }
-                            }
-                            ManifestCrateType::Staticlib => {
-                                #[cfg(all(target_os = "windows", target_env = "msvc"))]
-                                files.push(File {
-                                    src: relative_path
-                                        .with_extension("lib")
-                                        .to_str()
-                                        .unwrap()
-                                        .to_string(),
-                                    target: Some("lib".to_string()),
-                                    ..Default::default()
-                                });
-                                #[cfg(not(all(target_os = "windows", target_env = "msvc")))]
-                                files.push(File {
-                                    src: relative_path
-                                        .with_file_name(format!("lib{name}.a"))
-                                        .to_str()
-                                        .unwrap()
-                                        .to_string(),
-                                    target: Some("lib".to_string()),
-                                    ..Default::default()
-                                });
-                            }
-                            ManifestCrateType::Procmacro => {
-                                println!(
-                                    "cargo:warning=A `proc-macro` crate-type is not supported, please choose a more specific or configure a files section manually."
-                                );
-                            }
+        let relative_path = Path::new(&relative_path);
+        if l.crate_type.is_none() {
+            println!(
+                "cargo:warning=No `crate-type` specified for the `lib` crate, please choose a more specific or configure a files section manually."
+            );
+        }
+        if let Some(crate_types) = l.crate_type {
+            if crate_types.is_empty() {
+                println!(
+                    "cargo:warning=No `crate-type` specified for the `lib` crate, please choose a more specific or configure a files section manually."
+                );
+            }
+            for crate_type in crate_types {
+                match crate_type {
+                    ManifestCrateType::Bin => {
+                        #[cfg(target_os = "windows")]
+                        {
+                            push_file(
+                                &mut files,
+                                relative_path
+                                    .with_extension("exe")
+                                    .to_string_lossy()
+                                    .to_string(),
+                                "tools",
+                            );
+                            push_file(
+                                &mut files,
+                                relative_path
+                                    .with_extension("pdb")
+                                    .to_string_lossy()
+                                    .to_string(),
+                                "tools",
+                            );
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        {
+                            push_file(
+                                &mut files,
+                                relative_path.to_string_lossy().to_string(),
+                                "tools",
+                            );
                         }
                     }
+                    ManifestCrateType::Lib => {
+                        println!(
+                            "cargo:warning=A `lib` crate-type is not supported, please choose a more specific or configure a files section manually."
+                        );
+                    }
+                    ManifestCrateType::Rlib => {
+                        push_file(
+                            &mut files,
+                            relative_path
+                                .with_file_name(format!("lib{name}.rlib"))
+                                .to_string_lossy()
+                                .to_string(),
+                            "lib",
+                        );
+                    }
+                    ManifestCrateType::Cdylib | ManifestCrateType::Dylib => {
+                        #[cfg(target_os = "windows")]
+                        {
+                            push_file(
+                                &mut files,
+                                relative_path
+                                    .with_extension("dll")
+                                    .to_string_lossy()
+                                    .to_string(),
+                                "lib",
+                            );
+                            push_file(
+                                &mut files,
+                                relative_path
+                                    .with_extension("pdb")
+                                    .to_string_lossy()
+                                    .to_string(),
+                                "lib",
+                            );
+                        }
+                        #[cfg(target_os = "macos")]
+                        {
+                            push_file(
+                                &mut files,
+                                relative_path
+                                    .with_extension("dylib")
+                                    .to_string_lossy()
+                                    .to_string(),
+                                "lib",
+                            );
+                        }
+                        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                        {
+                            push_file(
+                                &mut files,
+                                relative_path
+                                    .with_file_name(format!("lib{name}.so"))
+                                    .to_string_lossy()
+                                    .to_string(),
+                                "lib",
+                            );
+                        }
+                    }
+                    ManifestCrateType::Staticlib => {
+                        #[cfg(all(target_os = "windows", target_env = "msvc"))]
+                        push_file(
+                            &mut files,
+                            relative_path
+                                .with_extension("lib")
+                                .to_string_lossy()
+                                .to_string(),
+                            "lib",
+                        );
+                        #[cfg(not(all(target_os = "windows", target_env = "msvc")))]
+                        push_file(
+                            &mut files,
+                            relative_path
+                                .with_file_name(format!("lib{name}.a"))
+                                .to_string_lossy()
+                                .to_string(),
+                            "lib",
+                        );
+                    }
+                    ManifestCrateType::Procmacro => {
+                        println!(
+                            "cargo:warning=A `proc-macro` crate-type is not supported, please choose a more specific or configure a files section manually."
+                        );
+                    }
                 }
-            };
-            if files.is_empty() {
-                None
-            } else {
-                Some(Files { file: files })
             }
         }
-    }
+    };
+
+    pkg.files = if files.is_empty() {
+        None
+    } else {
+        Some(Files { file: files })
+    };
 
     Ok(pkg)
+}
+
+fn push_file(files: &mut Vec<File>, src: String, target: &str) {
+    let src_file_name = Path::new(&src).file_name();
+    if src_file_name.is_none() {
+        return;
+    }
+    let src_file_name = src_file_name.unwrap().to_string_lossy().to_string();
+    for file in files.iter() {
+        if file.src.ends_with(&src_file_name) {
+            // If the file already exists, we do not add it again
+            return;
+        }
+    }
+    files.push(File {
+        src,
+        target: Some(
+            PathBuf::from(target)
+                .join(src_file_name)
+                .to_string_lossy()
+                .to_string(),
+        ),
+        ..Default::default()
+    });
 }
 
 // Retrieves the output directory path from the environment variable `OUT_DIR`
@@ -418,7 +443,7 @@ fn get_build_artifacts_path() -> Result<PathBuf, Box<dyn error::Error>> {
 
 // finds the relative path from `from_dir` to `to_file` if it is in the same directory tree
 // otherwise returns the absolute path to `to_file`
-fn get_relative_path(from_dir: PathBuf, to_file: String) -> Result<String, Box<dyn error::Error>> {
+fn get_relative_path(from_dir: &PathBuf, to_file: String) -> Result<String, Box<dyn error::Error>> {
     let to_file = fs::canonicalize(to_file)?;
     let from_dir = fs::canonicalize(from_dir)?;
     let mut from_dir_components = from_dir.components();

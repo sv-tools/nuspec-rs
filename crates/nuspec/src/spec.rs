@@ -7,9 +7,14 @@ use std::fmt::Display;
 ///
 /// See [NuGet documentation](https://docs.microsoft.com/en-us/nuget/reference/nuspec) for more details.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename = "package")]
+#[serde(rename = "package", deny_unknown_fields)]
 pub struct Package {
-    #[serde(rename = "@xmlns", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@xmlns",
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "xmlns"
+    )]
     pub namespace: Option<String>,
     #[serde(default)]
     pub metadata: Metadata,
@@ -18,6 +23,7 @@ pub struct Package {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Metadata {
     /// The case-insensitive package identifier, which must be unique across nuget.org or
     /// whatever gallery the package resides in.
@@ -49,7 +55,11 @@ pub struct Metadata {
     /// A URL for the package's home page, often shown in UI displays as well as nuget.org.
     ///
     /// When uploading a package to nuget.org, the projectUrl field is limited to 4000 characters.
-    #[serde(rename = "projectUrl", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "projectUrl",
+        skip_serializing_if = "Option::is_none",
+        alias = "project_url"
+    )]
     pub project_url: Option<String>,
 
     /// An SPDX license expression or path to a license file within the package,
@@ -146,7 +156,8 @@ pub struct Metadata {
     /// the package license before installing the package.
     #[serde(
         rename = "requireLicenseAcceptance",
-        skip_serializing_if = "Option::is_none"
+        skip_serializing_if = "Option::is_none",
+        alias = "require_license_acceptance"
     )]
     pub require_license_acceptance: Option<bool>,
 
@@ -157,14 +168,19 @@ pub struct Metadata {
     /// See [DevelopmentDependency support for PackageReference](https://github.com/NuGet/Home/wiki/DevelopmentDependency-support-for-PackageReference).
     #[serde(
         rename = "developmentDependency",
-        skip_serializing_if = "Option::is_none"
+        skip_serializing_if = "Option::is_none",
+        alias = "development_dependencies"
     )]
     pub development_dependency: Option<bool>,
 
     /// A description of the changes made in this release of the package,
     /// often used in UI like the Updates tab of the Visual Studio Package Manager in place of
     /// the package description.
-    #[serde(rename = "releaseNotes", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "releaseNotes",
+        skip_serializing_if = "Option::is_none",
+        alias = "release_notes"
+    )]
     pub release_notes: Option<String>,
 
     /// Copyright details for the package.
@@ -242,13 +258,21 @@ pub struct Metadata {
     ///     </files>
     /// </package>
     /// ```
-    #[serde(rename = "@minClientVersion", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@minClientVersion",
+        skip_serializing_if = "Option::is_none",
+        alias = "min_client_version"
+    )]
     pub min_client_version: Option<String>,
 
     /// A collection of zero or more <packageType> elements specifying the type of the package
     /// if other than a traditional dependency package.
     /// Each packageType has attributes of name and version
-    #[serde(rename = "packageTypes", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "packageTypes",
+        skip_serializing_if = "Option::is_none",
+        alias = "package_types"
+    )]
     pub package_types: Option<PackageTypes>,
 
     /// A collection of zero or more <dependency> elements specifying the dependencies for the package.
@@ -262,7 +286,8 @@ pub struct Metadata {
     /// Each frameworkAssembly has `assemblyName` and `targetFramework` attributes.
     #[serde(
         rename = "frameworkAssemblies",
-        skip_serializing_if = "Option::is_none"
+        skip_serializing_if = "Option::is_none",
+        alias = "framework_assemblies"
     )]
     pub framework_assemblies: Option<FrameworkAssemblies>,
 
@@ -278,12 +303,16 @@ pub struct Metadata {
     /// A collection of <files> elements that identify content files to include in the consuming project.
     /// These files are specified with a set of attributes that describe how they should be used
     /// within the project system.
-    #[serde(rename = "contentFiles", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "contentFiles",
+        skip_serializing_if = "Option::is_none",
+        alias = "content_files"
+    )]
     pub content_files: Option<ContentFiles>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "@type", content = "$text")]
+#[serde(tag = "@type", content = "$text", deny_unknown_fields)]
 pub enum License {
     #[serde(rename = "expression")]
     Expression(String),
@@ -292,38 +321,62 @@ pub enum License {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Repository {
     /// The type of the repository, such as "git", "svn", etc.
-    #[serde(rename = "@type", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@type",
+        skip_serializing_if = "Option::is_none",
+        alias = "type"
+    )]
     pub repository_type: Option<String>,
     /// The URL of the repository.
-    #[serde(rename = "@url", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@url",
+        skip_serializing_if = "Option::is_none",
+        alias = "url"
+    )]
     pub url: Option<String>,
     /// The branch name in the repository.
-    #[serde(rename = "@branch", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@branch",
+        skip_serializing_if = "Option::is_none",
+        alias = "branch"
+    )]
     pub branch: Option<String>,
     /// The commit SHA-1 hash in the repository.
-    #[serde(rename = "@commit", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@commit",
+        skip_serializing_if = "Option::is_none",
+        alias = "commit"
+    )]
     pub commit: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageTypes {
-    #[serde(rename = "packageType")]
+    #[serde(rename = "packageType", alias = "package_type")]
     pub package_type: Vec<PackageType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageType {
     /// The type of the package, such as "Dependency", "DotnetTool", etc.
-    #[serde(rename = "@name", with = "know_package_type")]
+    #[serde(rename = "@name", with = "know_package_type", alias = "name")]
     pub name: KnownPackageType,
     /// The version of the package type.
-    #[serde(rename = "@version", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@version",
+        skip_serializing_if = "Option::is_none",
+        alias = "version"
+    )]
     pub version: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum KnownPackageType {
     Dependency,
     DotnetTool,
@@ -346,6 +399,7 @@ impl Display for KnownPackageType {
 
 // It should be an enum type, but quick_xml + serde don't properly serialize/deserialize such a combination
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Dependencies {
     /// A collection of dependencies for the package.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -356,15 +410,16 @@ pub struct Dependencies {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Dependency {
     /// The package ID of the dependency, such as "EntityFramework" and "NUnit",
     /// which is the name of the package nuget.org shows on a package page.
-    #[serde(rename = "@id")]
+    #[serde(rename = "@id", alias = "id")]
     pub id: String,
     /// The range of versions acceptable as a dependency.
     /// See Package versioning for exact syntax.
     /// Floating versions are not supported.
-    #[serde(rename = "@version")]
+    #[serde(rename = "@version", alias = "version")]
     pub version: String,
 
     /// A comma-delimited list of include tags indicating of the dependency to include in
@@ -374,7 +429,8 @@ pub struct Dependency {
         rename = "@include",
         default,
         skip_serializing_if = "Option::is_none",
-        with = "optional_comma_separated"
+        with = "optional_comma_separated",
+        alias = "include"
     )]
     pub include: Option<Vec<String>>,
 
@@ -390,41 +446,54 @@ pub struct Dependency {
         rename = "@exclude",
         default,
         skip_serializing_if = "Option::is_none",
-        with = "optional_comma_separated"
+        with = "optional_comma_separated",
+        alias = "exclude"
     )]
     pub exclude: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct DependencyGroup {
     /// The target framework for the dependencies in this group, such as "netstandard2.0" or "net5.0".
-    #[serde(rename = "@targetFramework", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@targetFramework",
+        skip_serializing_if = "Option::is_none",
+        alias = "target_framework"
+    )]
     pub target_framework: Option<String>,
     /// A collection of dependencies for the target framework.
     pub dependency: Vec<Dependency>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FrameworkAssemblies {
     /// A collection of framework assemblies required by the package.
-    #[serde(rename = "frameworkAssembly")]
+    #[serde(rename = "frameworkAssembly", alias = "framework_assembly")]
     pub framework_assembly: Vec<FrameworkAssembly>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct FrameworkAssembly {
     /// The fully qualified assembly name.
-    #[serde(rename = "@assemblyName")]
+    #[serde(rename = "@assemblyName", alias = "assembly_name")]
     pub assembly_name: String,
     /// Specifies the target framework to which this reference applies.
     /// If omitted, indicates that the reference applies to all frameworks.
     /// See [Target frameworks](https://learn.microsoft.com/en-us/nuget/reference/target-frameworks)
     /// for the exact framework identifiers.
-    #[serde(rename = "@targetFramework", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@targetFramework",
+        skip_serializing_if = "Option::is_none",
+        alias = "target_framework"
+    )]
     pub target_framework: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct References {
     /// A collection of references for the package.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -435,22 +504,29 @@ pub struct References {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Reference {
     /// The file name of the assembly reference, such as "EntityFramework.dll" or "NUnit.Framework.dll".
-    #[serde(rename = "@file")]
+    #[serde(rename = "@file", alias = "file")]
     pub file: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ReferenceGroup {
     /// The target framework for the references in this group, such as "netstandard2.0" or "net5.0".
-    #[serde(rename = "@targetFramework", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@targetFramework",
+        skip_serializing_if = "Option::is_none",
+        alias = "target_framework"
+    )]
     pub target_framework: Option<String>,
     /// A collection of references for the target framework.
     pub reference: Vec<Reference>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ContentFiles {
     /// A collection of content files for the package.
     #[serde(rename = "files")]
@@ -458,12 +534,13 @@ pub struct ContentFiles {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ContentFile {
-    ///  The location of the file or files to include, subject to exclusions specified by
+    /// The location of the file or files to include, subject to exclusions specified by
     /// the exclude attribute.
     /// The path is relative to the contentFiles folder unless an absolute path is specified.
     /// The wildcard character * is allowed, and the double wildcard ** implies a recursive folder search.
-    #[serde(rename = "@include")]
+    #[serde(rename = "@include", alias = "include")]
     pub include: String,
 
     /// A semicolon-delimited list of files or file patterns to exclude from the src location.
@@ -472,30 +549,40 @@ pub struct ContentFile {
         rename = "@exclude",
         default,
         skip_serializing_if = "Option::is_none",
-        with = "optional_semicolon_separated"
+        with = "optional_semicolon_separated",
+        alias = "exclude"
     )]
     pub exclude: Option<Vec<String>>,
 
     /// The build action to assign to the content item for MSBuild, such as Content, None,
     /// Embedded Resource, Compile, etc.
     /// The default is Compile.
-    #[serde(rename = "@buildAction")]
+    #[serde(rename = "@buildAction", alias = "build_action")]
     pub build_action: Option<BuildAction>,
 
     /// A Boolean indicating whether to copy content items to the build (or publish) output folder.
     /// The default is false.
-    #[serde(rename = "@copyToOutput", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@copyToOutput",
+        skip_serializing_if = "Option::is_none",
+        alias = "copy_to_output"
+    )]
     pub copy_to_output: Option<bool>,
 
     /// A Boolean indicating whether to copy content items to a single folder in the build output (true),
     /// or to preserve the folder structure in the package (false).
     /// This flag only works when copyToOutput flag is set to true.
     /// The default is false.
-    #[serde(rename = "@flatten", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@flatten",
+        skip_serializing_if = "Option::is_none",
+        alias = "flatten"
+    )]
     pub flatten: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub enum BuildAction {
     Content,
     None,
@@ -504,24 +591,30 @@ pub enum BuildAction {
     Compile,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Files {
     /// A collection of files included in the package.
     pub file: Vec<File>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct File {
     /// The location of the file or files to include, subject to exclusions specified by
     /// the exclude attribute.
     /// The path is relative to the .nuspec file unless an absolute path is specified.
     /// The wildcard character * is allowed, and the double wildcard ** implies a recursive folder search.
-    #[serde(rename = "@src")]
+    #[serde(rename = "@src", alias = "src")]
     pub src: String,
     /// The relative path to the folder within the package where the source files are placed,
     /// which must begin with lib, content, build, or tools.
     /// See [Creating a .nuspec from a convention-based working directory](https://learn.microsoft.com/en-us/nuget/create-packages/creating-a-package#from-a-convention-based-working-directory).
-    #[serde(rename = "@target", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "@target",
+        skip_serializing_if = "Option::is_none",
+        alias = "target"
+    )]
     pub target: Option<String>,
     /// A semicolon-delimited list of files or file patterns to exclude from the src location.
     /// The wildcard character * is allowed, and the double wildcard ** implies a recursive folder search.
@@ -529,7 +622,8 @@ pub struct File {
         rename = "@exclude",
         default,
         skip_serializing_if = "Option::is_none",
-        with = "optional_semicolon_separated"
+        with = "optional_semicolon_separated",
+        alias = "exclude"
     )]
     pub exclude: Option<Vec<String>>,
 }
