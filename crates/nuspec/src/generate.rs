@@ -43,7 +43,20 @@ struct Manifest {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct ManifestPackage {
+    pub keywords: Option<ManifestPackageKeywords>,
     pub metadata: Option<ManifestPackageMetadata>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum ManifestPackageKeywords {
+    Keywords(Vec<String>),
+    Workspace(ManifestPackageKeywordsWorkspace),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ManifestPackageKeywordsWorkspace {
+    pub workspace: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -92,13 +105,15 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
     let manifest_content = fs::read_to_string(manifest_file)?;
     let manifest: Manifest = toml::from_str(&manifest_content)?;
     let build_artifacts_path = get_build_artifacts_path()?;
-    let nuspec_config = manifest
+    let nuspec_config = &manifest
         .package
+        .clone()
         .and_then(|p| p.metadata)
         .and_then(|m| m.nuspec)
         .unwrap_or_default();
     let out_dir = nuspec_config
         .out_dir
+        .clone()
         .and_then(|dir| {
             if dir.is_empty() {
                 None
@@ -113,7 +128,7 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
     if !out_dir.is_dir() {
         return Err(format!("The `out_dir` is not a directory: {out_dir:?}").into());
     }
-    let mut pkg = nuspec_config.package.unwrap_or_default();
+    let mut pkg = nuspec_config.package.clone().unwrap_or_default();
     let mut files = pkg.files.unwrap_or_default().file;
     for file in files.iter_mut() {
         let file_path = PathBuf::from(&file.src);
@@ -182,6 +197,41 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
             _ => None,
         };
     }
+
+    if pkg.metadata.tags.is_none() {
+        pkg.metadata.tags = if let Some(p) = manifest.package {
+            if let Some(k) = p.keywords {
+                match k {
+                    ManifestPackageKeywords::Keywords(keywords) => Some(keywords),
+                    ManifestPackageKeywords::Workspace(w) => {
+                        if w.workspace {
+                            let workspace_manifest = get_workspace_manifest_path()?;
+                            if let Some(workspace_manifest) = workspace_manifest.workspace {
+                                workspace_manifest
+                                    .package
+                                    .and_then(|p| p.keywords)
+                                    .and_then(|k| match k {
+                                        ManifestPackageKeywords::Keywords(keywords) => {
+                                            Some(keywords)
+                                        }
+                                        ManifestPackageKeywords::Workspace(_) => None,
+                                    })
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+    }
+
     if pkg.metadata.repository.is_none() {
         pkg.metadata.repository = match env::var("CARGO_PKG_REPOSITORY") {
             Ok(url) => {
@@ -480,4 +530,24 @@ fn get_relative_path(from_dir: &PathBuf, to_file: String) -> Result<String, Box<
     }
 
     Ok(relative_path.as_path().to_string_lossy().to_string())
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WorkspaceManifest {
+    pub workspace: Option<Manifest>,
+}
+
+fn get_workspace_manifest_path() -> Result<WorkspaceManifest, Box<dyn error::Error>> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let mut workspace_path = manifest_dir.as_path();
+    while let Some(parent) = workspace_path.parent() {
+        let manifest_file = parent.join("Cargo.toml");
+        if manifest_file.exists() {
+            let serialized = fs::read_to_string(&manifest_file)?;
+            let manifest = toml::from_str::<WorkspaceManifest>(&serialized)?;
+            return Ok(manifest);
+        }
+        workspace_path = parent;
+    }
+    Err("No workspace manifest found".into())
 }
