@@ -1,8 +1,7 @@
 use crate::{File, Files, License, Package, Repository, to_string_indent};
 use serde::Deserialize;
 use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::{env, error, fs};
+use std::{env, error, fs, io, path};
 
 /// Generates a NuSpec file based on the Cargo package metadata.
 /// The generated file will be placed in the output directory next to the Cargo build artifacts,
@@ -19,7 +18,7 @@ pub fn generate() -> Result<(), Box<dyn error::Error>> {
 }
 
 /// Generates a NuSpec file and writes it to the specified output directory.
-pub fn generate_to(out_dir: PathBuf) -> Result<(), Box<dyn error::Error>> {
+pub fn generate_to(out_dir: path::PathBuf) -> Result<(), Box<dyn error::Error>> {
     let pkg = load_package_config(out_dir.clone())?;
     let file_name = out_dir
         .join(pkg.metadata.id.clone())
@@ -100,8 +99,8 @@ enum ManifestCrateType {
     Procmacro,
 }
 
-fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error>> {
-    let manifest_file = PathBuf::from(env::var("CARGO_MANIFEST_PATH")?);
+fn load_package_config(out_dir: path::PathBuf) -> Result<Package, Box<dyn error::Error>> {
+    let manifest_file = path::PathBuf::from(env::var("CARGO_MANIFEST_PATH")?);
     let manifest_content = fs::read_to_string(manifest_file)?;
     let manifest: Manifest = toml::from_str(&manifest_content)?;
     let build_artifacts_path = get_build_artifacts_path()?;
@@ -118,7 +117,7 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
             if dir.is_empty() {
                 None
             } else {
-                Some(PathBuf::from(dir))
+                Some(path::PathBuf::from(dir))
             }
         })
         .unwrap_or(out_dir);
@@ -131,9 +130,11 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
     let mut pkg = nuspec_config.package.clone().unwrap_or_default();
     let mut files = pkg.files.unwrap_or_default().file;
     for file in files.iter_mut() {
-        let file_path = PathBuf::from(&file.src);
+        let file_path = path::PathBuf::from(&file.src);
         if file_path.is_relative() {
-            file.src = get_relative_path(&out_dir, file.src.clone())?;
+            file.src = get_relative_path(&out_dir, &file_path)?
+                .to_string_lossy()
+                .to_string();
         }
     }
 
@@ -184,9 +185,9 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                 if path.is_empty() {
                     None
                 } else {
-                    let license_path = get_relative_path(&out_dir, path)?;
-                    let license_file_name = Path::new(&license_path).file_name().ok_or(format!(
-                        "Failed to get the file name from the license: {license_path}"
+                    let license_path = get_relative_path(&out_dir, &path.into())?;
+                    let license_file_name = license_path.file_name().ok_or(format!(
+                        "Failed to get the file name from the license: {license_path:?}"
                     ))?;
                     push_file(&mut files, license_path.clone(), "");
                     Some(License::File(
@@ -253,9 +254,9 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                 if path.is_empty() {
                     None
                 } else {
-                    let readme_path = get_relative_path(&out_dir, path)?;
-                    let readme_file_name = Path::new(&readme_path).file_name().ok_or(format!(
-                        "Failed to get the file name from readme: {readme_path}"
+                    let readme_path = get_relative_path(&out_dir, &path.into())?;
+                    let readme_file_name = readme_path.file_name().ok_or(format!(
+                        "Failed to get the file name from readme: {readme_path:?}"
                     ))?;
                     push_file(&mut files, readme_path.clone(), "");
                     Some(readme_file_name.to_string_lossy().to_string())
@@ -268,51 +269,26 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
     manifest.binary.unwrap_or_default().iter().for_each(|b| {
         let base_name = build_artifacts_path.join(b.name.clone());
         let relative_path =
-            get_relative_path(&out_dir, base_name.as_path().to_string_lossy().to_string())
-                .unwrap_or(b.name.clone());
-        let relative_path = Path::new(&relative_path);
+            get_relative_path(&out_dir, &base_name).unwrap_or(b.name.clone().into());
         #[cfg(target_os = "windows")]
         {
-            push_file(
-                &mut files,
-                relative_path
-                    .with_extension("exe")
-                    .to_string_lossy()
-                    .to_string(),
-                "tools",
-            );
+            push_file(&mut files, relative_path.with_extension("exe"), "tools");
 
             let name = b.name.clone().replace("-", "_");
             let base_name = build_artifacts_path.join(name.clone());
             let relative_path =
-                get_relative_path(&out_dir, base_name.as_path().to_string_lossy().to_string())
-                    .unwrap_or(name.clone());
-            let relative_path = Path::new(&relative_path);
-            push_file(
-                &mut files,
-                relative_path
-                    .with_extension("pdb")
-                    .to_string_lossy()
-                    .to_string(),
-                "tools",
-            );
+                get_relative_path(&out_dir, &base_name).unwrap_or(name.clone().into());
+            push_file(&mut files, relative_path.with_extension("pdb"), "tools");
         }
         #[cfg(not(target_os = "windows"))]
         {
-            push_file(
-                &mut files,
-                relative_path.to_string_lossy().to_string(),
-                "tools",
-            );
+            push_file(&mut files, relative_path, "tools");
         }
     });
     if let Some(l) = manifest.lib {
         let name = l.name.unwrap_or(pkg_name.clone().replace("-", "_"));
         let base_name = build_artifacts_path.join(name.clone());
-        let relative_path =
-            get_relative_path(&out_dir, base_name.as_path().to_string_lossy().to_string())
-                .unwrap_or(name.clone());
-        let relative_path = Path::new(&relative_path);
+        let relative_path = get_relative_path(&out_dir, &base_name).unwrap_or(name.clone().into());
         if l.crate_type.is_none() {
             println!(
                 "cargo:warning=No `crate-type` specified for the `lib` crate, please choose a more specific or configure a files section manually."
@@ -329,30 +305,12 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                     ManifestCrateType::Bin => {
                         #[cfg(target_os = "windows")]
                         {
-                            push_file(
-                                &mut files,
-                                relative_path
-                                    .with_extension("exe")
-                                    .to_string_lossy()
-                                    .to_string(),
-                                "tools",
-                            );
-                            push_file(
-                                &mut files,
-                                relative_path
-                                    .with_extension("pdb")
-                                    .to_string_lossy()
-                                    .to_string(),
-                                "tools",
-                            );
+                            push_file(&mut files, relative_path.with_extension("exe"), "tools");
+                            push_file(&mut files, relative_path.with_extension("pdb"), "tools");
                         }
                         #[cfg(not(target_os = "windows"))]
                         {
-                            push_file(
-                                &mut files,
-                                relative_path.to_string_lossy().to_string(),
-                                "tools",
-                            );
+                            push_file(&mut files, relative_path.clone(), "tools");
                         }
                     }
                     ManifestCrateType::Lib => {
@@ -363,41 +321,21 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                     ManifestCrateType::Rlib => {
                         push_file(
                             &mut files,
-                            relative_path
-                                .with_file_name(format!("lib{name}.rlib"))
-                                .to_string_lossy()
-                                .to_string(),
+                            relative_path.with_file_name(format!("lib{name}.rlib")),
                             "lib",
                         );
                     }
                     ManifestCrateType::Cdylib | ManifestCrateType::Dylib => {
                         #[cfg(target_os = "windows")]
                         {
-                            push_file(
-                                &mut files,
-                                relative_path
-                                    .with_extension("dll")
-                                    .to_string_lossy()
-                                    .to_string(),
-                                "lib",
-                            );
-                            push_file(
-                                &mut files,
-                                relative_path
-                                    .with_extension("pdb")
-                                    .to_string_lossy()
-                                    .to_string(),
-                                "lib",
-                            );
+                            push_file(&mut files, relative_path.with_extension("dll"), "lib");
+                            push_file(&mut files, relative_path.with_extension("pdb"), "lib");
                         }
                         #[cfg(target_os = "macos")]
                         {
                             push_file(
                                 &mut files,
-                                relative_path
-                                    .with_file_name(format!("lib{name}.dylib"))
-                                    .to_string_lossy()
-                                    .to_string(),
+                                relative_path.with_file_name(format!("lib{name}.dylib")),
                                 "lib",
                             );
                         }
@@ -405,31 +343,18 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
                         {
                             push_file(
                                 &mut files,
-                                relative_path
-                                    .with_file_name(format!("lib{name}.so"))
-                                    .to_string_lossy()
-                                    .to_string(),
+                                relative_path.with_file_name(format!("lib{name}.so")),
                                 "lib",
                             );
                         }
                     }
                     ManifestCrateType::Staticlib => {
                         #[cfg(all(target_os = "windows", target_env = "msvc"))]
-                        push_file(
-                            &mut files,
-                            relative_path
-                                .with_extension("lib")
-                                .to_string_lossy()
-                                .to_string(),
-                            "lib",
-                        );
+                        push_file(&mut files, relative_path.with_extension("lib"), "lib");
                         #[cfg(not(all(target_os = "windows", target_env = "msvc")))]
                         push_file(
                             &mut files,
-                            relative_path
-                                .with_file_name(format!("lib{name}.a"))
-                                .to_string_lossy()
-                                .to_string(),
+                            relative_path.with_file_name(format!("lib{name}.a")),
                             "lib",
                         );
                     }
@@ -452,8 +377,8 @@ fn load_package_config(out_dir: PathBuf) -> Result<Package, Box<dyn error::Error
     Ok(pkg)
 }
 
-fn push_file(files: &mut Vec<File>, src: String, target: &str) {
-    let src_file_name = Path::new(&src).file_name();
+fn push_file(files: &mut Vec<File>, src: path::PathBuf, target: &str) {
+    let src_file_name = src.file_name();
     if src_file_name.is_none() {
         return;
     }
@@ -465,9 +390,9 @@ fn push_file(files: &mut Vec<File>, src: String, target: &str) {
         }
     }
     files.push(File {
-        src,
+        src: src.to_string_lossy().to_string(),
         target: Some(
-            PathBuf::from(target)
+            path::PathBuf::from(target)
                 .join(src_file_name)
                 .to_string_lossy()
                 .to_string(),
@@ -478,8 +403,8 @@ fn push_file(files: &mut Vec<File>, src: String, target: &str) {
 
 // Retrieves the output directory path from the environment variable `OUT_DIR`
 // and navigates up to the directory that matches the current build profile.
-fn get_build_artifacts_path() -> Result<PathBuf, Box<dyn error::Error>> {
-    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
+fn get_build_artifacts_path() -> Result<path::PathBuf, Box<dyn error::Error>> {
+    let out_dir = path::PathBuf::from(env::var("OUT_DIR")?);
     let mut out_path = out_dir.as_path();
     let profile = env::var("PROFILE")?;
     while let Some(parent) = out_path.parent() {
@@ -491,17 +416,20 @@ fn get_build_artifacts_path() -> Result<PathBuf, Box<dyn error::Error>> {
     Err("No output directory found".into())
 }
 
-// finds the relative path from `from_dir` to `to_file` if it is in the same directory tree
-// otherwise returns the absolute path to `to_file`
-fn get_relative_path(from_dir: &PathBuf, to_file: String) -> Result<String, Box<dyn error::Error>> {
-    let to_file = fs::canonicalize(to_file)?;
-    let from_dir = fs::canonicalize(from_dir)?;
-    let mut from_dir_components = from_dir.components();
-    let mut to_file_components = to_file.components();
+/// Returns the relative path from `from_dir` to `to_file`.
+fn get_relative_path<P: AsRef<path::Path>>(from_path: P, to_path: P) -> io::Result<path::PathBuf> {
+    let from_path = path::absolute(from_path)?;
+    let to_path = path::absolute(to_path)?;
+    let mut from_dir_components = from_path.components();
+    let mut to_file_components = to_path.components();
 
-    // Check if the `to_file` is in the same directory tree as `from_dir`
+    // Check if the `to_file` is in the same directory tree as `from_dir` on windows
+    #[cfg(target_os = "windows")]
     if !from_dir_components.next().eq(&to_file_components.next()) {
-        return Ok(to_file.to_string_lossy().to_string());
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "The `to_file` is not in the same directory tree as `from_dir`",
+        ));
     }
 
     // Skip the common components
@@ -512,7 +440,7 @@ fn get_relative_path(from_dir: &PathBuf, to_file: String) -> Result<String, Box<
         to_file_component = to_file_components.next();
     }
 
-    let mut relative_path = PathBuf::new();
+    let mut relative_path = path::PathBuf::new();
     if from_dir_component.is_some() {
         // Add `..` for each component in `from_dir` that is not in `to_file`
         // Manually add one `..` because it was skipped in the loop above
@@ -521,15 +449,16 @@ fn get_relative_path(from_dir: &PathBuf, to_file: String) -> Result<String, Box<
             relative_path.push("..");
         }
     }
+
     // Add the remaining components of `to_file`
     if let Some(component) = to_file_component {
-        relative_path.push(component.as_os_str());
+        relative_path.push(component);
         for component in to_file_components {
-            relative_path.push(component.as_os_str());
+            relative_path.push(component);
         }
     }
 
-    Ok(relative_path.as_path().to_string_lossy().to_string())
+    Ok(relative_path)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -538,7 +467,7 @@ struct WorkspaceManifest {
 }
 
 fn get_workspace_manifest_path() -> Result<WorkspaceManifest, Box<dyn error::Error>> {
-    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
+    let manifest_dir = path::PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let mut workspace_path = manifest_dir.as_path();
     while let Some(parent) = workspace_path.parent() {
         let manifest_file = parent.join("Cargo.toml");
