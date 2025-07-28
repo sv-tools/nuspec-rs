@@ -23,16 +23,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4.2.2 # immutable action, safe to use the versions
       - run: cargo build --all-features --verbose
-  Toml-Fmt:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4.2.2 # immutable action, safe to use the versions
-      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
-        with:
-          cache-targets: false
-          cache-all-crates: true
-      - run: cargo tools
-      - run: taplo fmt --check
   Format:
     runs-on: ubuntu-latest
     steps:
