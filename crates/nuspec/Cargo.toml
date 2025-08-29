@@ -14,7 +14,7 @@ categories.workspace = true
 default = ["generate"]
 # The `generate` feature is enabled by default, but can be disabled
 # if you want to use the library without generating Nuspec files.
-generate = ["toml"]
+generate = ["dep:toml"]
 
 [dependencies]
 quick-xml = { version = "0.38.0", features = ["serialize"] }

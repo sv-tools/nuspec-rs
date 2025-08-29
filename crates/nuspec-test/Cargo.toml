@@ -9,6 +9,7 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 description = "A test crate for nuspec"
+publish = false
 
 [[bin]]
 name = "nuspec_test_bin_1"
