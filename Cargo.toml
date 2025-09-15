@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/nuspec", "crates/nuspec-test"]
+members = ["crates/nuspec", "crates/nuspec-test", "crates/cargo-nuspec"]
 
 [workspace.package]
 edition = "2024"
