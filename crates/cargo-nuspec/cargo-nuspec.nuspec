@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package>
+  <metadata>
+    <id>cargo-nuspec</id>
+    <version>0.2.0</version>
+    <description>A cargo subcommand to generate .nuspec files for Rust packages</description>
+    <authors>Sergey Vilgelm &lt;sergey@vilgelm.com&gt;</authors>
+    <license type="expression">MIT OR Apache-2.0</license>
+    <tags>nuspec nuget nupkg</tags>
+    <repository url="https://github.com/sv-tools/nuspec-rs"/>
+  </metadata>
+</package>
