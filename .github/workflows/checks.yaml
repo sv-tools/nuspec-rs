@@ -88,7 +88,7 @@ jobs:
         run: cargo publish --all-features --package ${{ matrix.crate }} --dry-run --verbose
       - name: Create package
         run: cargo package --all-features --package ${{ matrix.crate }} --verbose
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: ${{ matrix.crate }}-crate
           path: target/package/${{ matrix.crate }}-*.crate
@@ -110,7 +110,7 @@ jobs:
       - run: ls ./target/release
       - run: cat ./target/release/${{ matrix.crate }}.nuspec
       - run: nuget pack ./target/release/${{ matrix.crate }}.nuspec
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: ${{ matrix.crate }}-${{ matrix.os }}-nuget
           path: ./${{ matrix.crate }}.*.nupkg
