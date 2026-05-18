@@ -56,7 +56,7 @@ jobs:
         run: cargo llvm-cov report --lcov --output-path coverage.lcov
       - name: Upload coverage reports to Codecov
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload test results to Codecov
@@ -88,7 +88,7 @@ jobs:
         run: cargo publish --all-features --package ${{ matrix.crate }} --dry-run --verbose
       - name: Create package
         run: cargo package --all-features --package ${{ matrix.crate }} --verbose
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.crate }}-crate
           path: target/package/${{ matrix.crate }}-*.crate
@@ -105,12 +105,12 @@ jobs:
         if: ${{ matrix.os == 'ubuntu-latest' }}
       - run: brew install mono
         if: ${{ matrix.os == 'macos-latest' }}
-      - uses: NuGet/setup-nuget@12c57947e9458a5b976961b08ea0706a17dd71ae  # v3.0.0
+      - uses: NuGet/setup-nuget@b26b823c478ee115be5c9403e62c90b0bf943843  # v3.1.0
       - run: cargo build --package ${{ matrix.crate }} --verbose --release
       - run: ls ./target/release
       - run: cat ./target/release/${{ matrix.crate }}.nuspec
       - run: nuget pack ./target/release/${{ matrix.crate }}.nuspec
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.crate }}-${{ matrix.os }}-nuget
           path: ./${{ matrix.crate }}.*.nupkg
