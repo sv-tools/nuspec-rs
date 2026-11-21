@@ -37,9 +37,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: sv-tools/rust-metadata-action@56f5f4f6a41e50d5f5f440bd81c0ed041f9b8dfb # v1.2.3
         id: rustmeta
-        with:
-          # `default` only enables `generate`, which has its own row.
-          matrix-exclude-features: nuspec:default
   BuildJob:
     name: Build per Package and Feature
     needs: RustMeta
@@ -144,9 +141,23 @@ jobs:
       - name: Run tests
         run: cargo llvm-cov nextest ${{ matrix.args }} --all-targets --no-fail-fast --no-tests=pass --verbose
       # nextest does not execute doctests, so run them with the standard
-      # test harness.
+      # test harness. Bin-only crates (`cargo-nuspec`) have no library target,
+      # and `cargo test --doc` bails with "no library targets found": treat
+      # that specific error as a skip and surface every other failure.
       - name: Run doctests
-        run: cargo test --doc ${{ matrix.args }} --no-fail-fast --verbose
+        shell: bash
+        run: |
+          log=$(cargo test --doc ${{ matrix.args }} --no-fail-fast --verbose 2>&1) || rc=$?
+          rc=${rc:-0}
+          printf '%s\n' "$log"
+          if [[ $rc -eq 0 ]]; then
+            exit 0
+          fi
+          if grep -qF "no library targets found" <<< "$log"; then
+            echo "::notice::doctests skipped — package has no library target"
+            exit 0
+          fi
+          exit $rc
       - name: Prepare coverage report
         if: ${{ !cancelled() }}
         run: cargo llvm-cov report --lcov --output-path coverage.lcov
@@ -280,41 +291,82 @@ jobs:
         with:
           name: packaged-crates
           path: target/package/*.crate
-  PublishNugetJob:
-    name: Pack the test crate as a NuGet package
+  NuGetJob:
+    name: Pack and consume NuGet packages
+    # End-to-end check of `cargo nuspec` on the `nuspec-test` crate: stage and pack both
+    # packages, pack the staged `.nuspec` with `nuget` too, call the cdylib from a .NET app
+    # that installs the native package, and run a binary unzipped from the app package.
     strategy:
       matrix:
-        crate: [ "nuspec-test" ]
         os: [ "ubuntu-latest", "windows-latest", "macos-latest" ]
       fail-fast: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
-      - run: sudo apt install mono-devel
-        if: ${{ matrix.os == 'ubuntu-latest' }}
-      - run: brew install mono
-        if: ${{ matrix.os == 'macos-latest' }}
-      - uses: NuGet/setup-nuget@fd55a6f3b34392fa83fde1454582407d8c714123 # v4.0
-      - run: cargo build --package ${{ matrix.crate }} --verbose --release
-      - run: ls ./target/release
-      - run: cat ./target/release/${{ matrix.crate }}.nuspec
-      - run: nuget pack ./target/release/${{ matrix.crate }}.nuspec
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
-          name: ${{ matrix.crate }}-${{ matrix.os }}-nuget
-          path: ./${{ matrix.crate }}.*.nupkg
+          dotnet-version: 10.0.x
+      - run: sudo apt install mono-devel
+        if: ${{ runner.os == 'Linux' }}
+      - run: brew install mono
+        if: ${{ runner.os == 'macOS' }}
+      - uses: NuGet/setup-nuget@fd55a6f3b34392fa83fde1454582407d8c714123 # v4.0
+      - name: Stage and pack with cargo nuspec
+        run: cargo run --package cargo-nuspec -- nuspec --package nuspec-test --release --stage --pack --out-dir dist
+      - name: Pack the staged nuspec files with nuget
+        shell: bash
+        run: |
+          set -euo pipefail
+          for nuspec in dist/*/*.nuspec; do
+            nuget pack "$nuspec" -OutputDirectory nuget-pack
+          done
+          ls -l nuget-pack
+      - name: Call the native library from .NET
+        shell: bash
+        working-directory: crates/nuspec-test/dotnet
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "nuspec-test") | .version')
+          dotnet restore --source "$GITHUB_WORKSPACE/dist" -p:NuspecTestVersion="$version"
+          output=$(dotnet run --no-restore -p:NuspecTestVersion="$version")
+          echo "$output"
+          grep -qF "Hello from Rust!" <<<"$output"
+      - name: Run a binary from the app package
+        shell: bash
+        run: |
+          set -euo pipefail
+          app=$(ls dist/nuspec-test.*.nupkg | grep -E 'nuspec-test\.[a-z]+-' )
+          mkdir app
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            # Windows' own bsdtar reads zip archives; Git Bash's GNU tar does not.
+            /c/Windows/System32/tar.exe -xf "$app" -C app
+          else
+            unzip -q "$app" -d app
+          fi
+          ls -l app/tools
+          output=$(./app/tools/nuspec_test_bin_1)
+          echo "$output"
+          grep -qF "Hello, world!" <<<"$output"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: nuspec-test-${{ matrix.os }}-nuget
+          path: |
+            dist/*.nupkg
+            nuget-pack/*.nupkg
   Publish:
     name: Wait for publishing jobs to finish
     needs:
       - RustMeta
       - PublishCrateJob
-      - PublishNugetJob
+      - NuGetJob
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
       - name: Check status
-        if: ${{ needs.PublishNugetJob.result != 'success' || (needs.RustMeta.outputs.publish != '[]' && needs.PublishCrateJob.result != 'success') }}
+        if: ${{ needs.NuGetJob.result != 'success' || (needs.RustMeta.outputs.publish != '[]' && needs.PublishCrateJob.result != 'success') }}
         run: exit 1
   AllChecks:
     name: All checks

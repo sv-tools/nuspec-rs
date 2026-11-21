@@ -14,10 +14,6 @@ categories.workspace = true
 exclude = ["tests/fixtures"]
 
 [features]
-default = ["generate"]
-# The `generate` feature is enabled by default, but can be disabled
-# if you want to use the library without generating Nuspec files.
-generate = ["dep:toml"]
 # Builds `Package`s from `cargo metadata` and `cargo build --message-format=json` output.
 cargo = ["dep:cargo_metadata", "dep:glob", "dep:serde_json", "dep:zip"]
 
@@ -27,7 +23,6 @@ glob = { workspace = true, optional = true }
 quick-xml.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, optional = true }
-toml = { workspace = true, optional = true }
 zip = { workspace = true, optional = true }
 
 [lints]

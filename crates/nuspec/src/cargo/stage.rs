@@ -10,8 +10,9 @@ use std::{fs, io};
 /// signed in place, and then packed with `nuget pack dir/<id>.nuspec`.
 ///
 /// `src` paths may contain the `*`, `?` and `**` wildcards; the part of the path matched by
-/// them is preserved under `target`, as `nuget pack` does. A `target` with the same extension
-/// as its `src` file names the file itself rather than a folder. Existing files in `dir` are
+/// them is preserved under `target`, as `nuget pack` does. As with `nuget pack`, a `target`
+/// with the same extension as its `src` (including no extension) is the file's full path, and
+/// any other `target`, or one ending with `/`, is a folder. Existing files in `dir` are
 /// overwritten but not removed.
 ///
 /// Relative `src` paths are resolved against the current directory. Returns the staged package
@@ -32,10 +33,10 @@ pub fn stage(package: &Package, dir: &Path) -> Result<(Package, PathBuf), Layout
         }
         fs::copy(&source, &to).map_err(io_err(&source))?;
 
-        let folder = dest.rsplit_once('/').map_or("", |(folder, _)| folder);
+        // The full path as target, so `nuget pack` places it exactly here (see `push_file`).
         staged.push(File {
             src: dest.clone(),
-            target: Some(folder.to_string()),
+            target: Some(dest),
             exclude: None,
         });
     }
@@ -149,14 +150,14 @@ mod tests {
         assert_eq!(
             staged_files(&staged),
             vec![
-                pair("README.md", ""),
+                pair("README.md", "README.md"),
                 pair(
                     "runtimes/win-x64/native/demo.dll",
-                    "runtimes/win-x64/native"
+                    "runtimes/win-x64/native/demo.dll"
                 ),
-                pair("scripts/a.ps1", "scripts"),
-                pair("scripts/sub/b.ps1", "scripts/sub"),
-                pair("docs/NOTICE", "docs"),
+                pair("scripts/a.ps1", "scripts/a.ps1"),
+                pair("scripts/sub/b.ps1", "scripts/sub/b.ps1"),
+                pair("docs/NOTICE", "docs/NOTICE"),
             ]
         );
         assert_eq!(
@@ -175,15 +176,26 @@ mod tests {
     }
 
     #[test]
-    fn test_target_as_file_name() {
-        let tmp = TempDir::new("rename");
-        let src = tmp.write("in/readme.md", "x");
-        let (staged, _) = stage(
-            &package(vec![file(&src, "docs/README.md")]),
-            &tmp.0.join("out"),
-        )
-        .unwrap();
-        assert_eq!(staged_files(&staged), vec![pair("docs/README.md", "docs")]);
+    fn test_target_rules_match_nuget() {
+        let tmp = TempDir::new("rules");
+        let readme = tmp.write("in/readme.md", "x");
+        let bin = tmp.write("in/app", "x");
+        let case = std::cell::Cell::new(0);
+        let staged = |target: &str, src: &str| {
+            case.set(case.get() + 1);
+            let out = tmp.0.join(format!("out{}", case.get()));
+            let (pkg, _) = stage(&package(vec![file(src, target)]), &out).unwrap();
+            staged_files(&pkg)[0].0.clone()
+        };
+        // Same extension as the source: the target is the file's path.
+        assert_eq!(staged("docs/README.md", &readme), "docs/README.md");
+        // Different extension, or a trailing separator: the target is a folder.
+        assert_eq!(staged("docs", &readme), "docs/readme.md");
+        assert_eq!(staged("docs/", &bin), "docs/app");
+        assert_eq!(staged("", &bin), "app");
+        // No extension on either side: a file path, as `nuget pack` does (NU5050 otherwise).
+        assert_eq!(staged("tools", &bin), "tools");
+        assert_eq!(staged("tools/app", &bin), "tools/app");
     }
 
     #[test]

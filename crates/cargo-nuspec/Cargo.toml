@@ -1,0 +1,25 @@
+[package]
+name = "cargo-nuspec"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Cargo subcommand that builds a crate and packages it as NuGet packages (.nuspec / .nupkg)"
+readme.workspace = true
+repository.workspace = true
+keywords = ["nuget", "nupkg", "nuspec", "cargo-subcommand"]
+categories = ["development-tools::cargo-plugins", "development-tools::build-utils"]
+
+[dependencies]
+anyhow.workspace = true
+cargo_metadata.workspace = true
+clap.workspace = true
+nuspec = { workspace = true, features = ["cargo"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+zip.workspace = true
+
+[lints]
+workspace = true

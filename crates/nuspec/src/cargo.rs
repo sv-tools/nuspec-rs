@@ -44,7 +44,7 @@
 //! `snake_case`. Values set there win over the ones derived from Cargo.
 
 use crate::{File, Files, License, Metadata, Package, Repository, ValidationErrors};
-use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
+use cargo_metadata::camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use cargo_metadata::{Artifact, CrateType, TargetKind};
 use serde::Deserialize;
 use std::{error, fmt};
@@ -371,10 +371,21 @@ fn build_package(
         let src = if src.is_absolute() {
             src.to_path_buf()
         } else {
-            manifest_dir.join(src)
+            normalize(&manifest_dir.join(src))
+        };
+        // Spell out where a single file goes, so `nuget pack` cannot read the target
+        // differently (see `push_file`); wildcard targets are always folders.
+        let target = if layout::has_wildcard(&extra.src) {
+            extra.target.clone()
+        } else {
+            Some(layout::file_destination(
+                src.as_std_path(),
+                extra.target.as_deref().unwrap_or_default(),
+            ))
         };
         files.push(File {
             src: src.into_string(),
+            target,
             ..extra.clone()
         });
     }
@@ -417,7 +428,7 @@ fn from_cargo(package: &cargo_metadata::Package, files: &mut Vec<File>) -> Metad
         && let Some(name) = path.file_name()
     {
         metadata.license = Some(License::File(name.to_string()));
-        push_file(files, &path, "");
+        push_file(files, &normalize(&path), "");
     }
 
     // NuGet only renders Markdown readmes.
@@ -428,7 +439,7 @@ fn from_cargo(package: &cargo_metadata::Package, files: &mut Vec<File>) -> Metad
         && let Some(name) = path.file_name()
     {
         metadata.readme = Some(name.to_string());
-        push_file(files, &path, "");
+        push_file(files, &normalize(&path), "");
     }
     metadata
 }
@@ -513,14 +524,43 @@ fn fill(target: &mut Metadata, from: Metadata) {
     option(&mut target.content_files, content_files);
 }
 
-fn push_file(files: &mut Vec<File>, src: &Utf8Path, target: &str) {
+/// Removes `.` and `..` components without touching the file system, so paths such as
+/// `crate/../../README.md` (from workspace-inherited fields) read naturally.
+fn normalize(path: &Utf8Path) -> Utf8PathBuf {
+    let mut out = Utf8PathBuf::new();
+    for component in path.components() {
+        match component {
+            Utf8Component::CurDir => {}
+            Utf8Component::ParentDir
+                if matches!(out.components().next_back(), Some(Utf8Component::Normal(_))) =>
+            {
+                out.pop();
+            }
+            other => out.push(other.as_str()),
+        }
+    }
+    out
+}
+
+/// Adds `src` to the package in the `folder` directory.
+///
+/// The target is written as the full path of the file, not the folder: `nuget pack` treats a
+/// `target` with the same extension as `src` as a file name, which for extensionless binaries
+/// would otherwise turn `tools` into a file.
+fn push_file(files: &mut Vec<File>, src: &Utf8Path, folder: &str) {
+    let name = src.file_name().unwrap_or_default();
+    let target = if folder.is_empty() {
+        name.to_string()
+    } else {
+        format!("{folder}/{name}")
+    };
     let src = src.to_string();
     if files.iter().any(|f| f.src == src) {
         return;
     }
     files.push(File {
         src,
-        target: Some(target.to_string()),
+        target: Some(target),
         exclude: None,
     });
 }
@@ -725,8 +765,11 @@ mod tests {
         assert_eq!(
             files(native),
             vec![
-                pair("/work/demo/README.md", ""),
-                pair("/work/target/release/demo.dll", "runtimes/win-x64/native"),
+                pair("/work/demo/README.md", "README.md"),
+                pair(
+                    "/work/target/release/demo.dll",
+                    "runtimes/win-x64/native/demo.dll"
+                ),
             ]
         );
 
@@ -735,8 +778,8 @@ mod tests {
         assert_eq!(
             files(app),
             vec![
-                pair("/work/demo/README.md", ""),
-                pair("/work/target/release/demo-cli.exe", "tools"),
+                pair("/work/demo/README.md", "README.md"),
+                pair("/work/target/release/demo-cli.exe", "tools/demo-cli.exe"),
             ]
         );
     }
@@ -776,10 +819,16 @@ mod tests {
         assert_eq!(
             files(native),
             vec![
-                pair("/work/demo/README.md", ""),
-                pair("/work/target/release/demo.dll", "runtimes/win-x64/native"),
-                pair("/work/target/release/demo.pdb", "runtimes/win-x64/native"),
-                pair("/work/demo/NOTICE.txt", ""),
+                pair("/work/demo/README.md", "README.md"),
+                pair(
+                    "/work/target/release/demo.dll",
+                    "runtimes/win-x64/native/demo.dll"
+                ),
+                pair(
+                    "/work/target/release/demo.pdb",
+                    "runtimes/win-x64/native/demo.pdb"
+                ),
+                pair("/work/demo/NOTICE.txt", "NOTICE.txt"),
             ]
         );
 
@@ -789,10 +838,10 @@ mod tests {
         assert_eq!(
             files(app),
             vec![
-                pair("/work/demo/README.md", ""),
-                pair("/work/target/release/demo-cli.exe", ""),
-                pair("/work/demo/NOTICE.txt", ""),
-                pair("/abs/run.ps1", "scripts"),
+                pair("/work/demo/README.md", "README.md"),
+                pair("/work/target/release/demo-cli.exe", "demo-cli.exe"),
+                pair("/work/demo/NOTICE.txt", "NOTICE.txt"),
+                pair("/abs/run.ps1", "scripts/run.ps1"),
             ]
         );
     }
@@ -825,8 +874,8 @@ mod tests {
         assert_eq!(
             files(&result[0]),
             vec![
-                pair("/work/demo/LICENSE.txt", ""),
-                pair("/t/libdemo.so", "runtimes/linux-x64/native"),
+                pair("/work/demo/LICENSE.txt", "LICENSE.txt"),
+                pair("/t/libdemo.so", "runtimes/linux-x64/native/libdemo.so"),
             ]
         );
     }
@@ -878,6 +927,14 @@ mod tests {
             packages(&pkg, &artifacts, "win-x64"),
             Err(Error::MissingArtifact { .. })
         ));
+    }
+
+    #[test]
+    fn test_normalize() {
+        assert_eq!(normalize("/w/crate/../../README.md".into()), "/README.md");
+        assert_eq!(normalize("/w/./a/../b".into()), "/w/b");
+        assert_eq!(normalize("../a/./b".into()), "../a/b");
+        assert_eq!(normalize("/w/deploy/**/*.ps1".into()), "/w/deploy/**/*.ps1");
     }
 
     #[test]
