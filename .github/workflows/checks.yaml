@@ -340,7 +340,8 @@ jobs:
           app=$(ls dist/nuspec-test.*.nupkg | grep -E 'nuspec-test\.[a-z]+-' )
           mkdir app
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            tar -xf "$app" -C app
+            # Windows' own bsdtar reads zip archives; Git Bash's GNU tar does not.
+            /c/Windows/System32/tar.exe -xf "$app" -C app
           else
             unzip -q "$app" -d app
           fi
