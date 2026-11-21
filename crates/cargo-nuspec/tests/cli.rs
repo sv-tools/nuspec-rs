@@ -10,7 +10,9 @@ fn manifest() -> PathBuf {
 }
 
 /// Runs `cargo nuspec` with its own target directory, shared between tests so the crate is
-/// built once, and without the coverage instrumentation of the outer build.
+/// built once. The nested `cargo build` drops the coverage instrumentation flags of the outer
+/// build, but `LLVM_PROFILE_FILE` is kept so `cargo llvm-cov` still collects the coverage of
+/// the `cargo-nuspec` process itself.
 fn cargo_nuspec(args: &[&str]) -> Vec<PathBuf> {
     let target_dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("e2e-target");
     let output = Command::new(env!("CARGO_BIN_EXE_cargo-nuspec"))
@@ -23,7 +25,6 @@ fn cargo_nuspec(args: &[&str]) -> Vec<PathBuf> {
         .env_remove("CARGO_ENCODED_RUSTFLAGS")
         .env_remove("RUSTC_WRAPPER")
         .env_remove("RUSTC_WORKSPACE_WRAPPER")
-        .env_remove("LLVM_PROFILE_FILE")
         .output()
         .unwrap();
     assert!(
