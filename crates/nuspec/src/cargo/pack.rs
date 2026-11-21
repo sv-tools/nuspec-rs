@@ -358,7 +358,7 @@ mod tests {
         }
 
         let pkg = package(vec![
-            file("in/demo-app", "tools"),
+            file("in/demo-app", "tools/"),
             file("in/demo.dll", "runtimes/win-x64/native"),
             file("in/README.md", ""),
             file("in/my file.txt", "docs"),

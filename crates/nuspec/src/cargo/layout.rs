@@ -96,24 +96,14 @@ pub(super) fn resolve(
 /// Resolves a `<file>` into `(source path, path inside the package)` pairs. Relative `src`
 /// paths are resolved against `base`.
 fn expand(file: &File, base: &Path) -> Result<Vec<(PathBuf, String)>, LayoutError> {
-    let target = file.target.as_deref().unwrap_or_default();
-    let target = target.trim_matches(['/', '\\']).replace('\\', "/");
+    let raw_target = file.target.as_deref().unwrap_or_default();
+    let target = raw_target.trim_matches(['/', '\\']).replace('\\', "/");
     let relative_src = Path::new(&file.src);
     let src = base.join(relative_src);
     let src = src.as_path();
 
     if !has_wildcard(&file.src) {
-        let name = src
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let target_ext = Path::new(&target).extension();
-        let dest = if !target.is_empty() && target_ext.is_some() && target_ext == src.extension() {
-            target
-        } else {
-            join(&target, &name)
-        };
-        return Ok(vec![(src.to_path_buf(), dest)]);
+        return Ok(vec![(src.to_path_buf(), file_destination(src, raw_target))]);
     }
 
     let excludes = file
@@ -178,7 +168,30 @@ fn expand(file: &File, base: &Path) -> Result<Vec<(PathBuf, String)>, LayoutErro
     Ok(result)
 }
 
-fn has_wildcard(s: &str) -> bool {
+/// The path inside the package of a single (non-wildcard) `src` file with the given `target`.
+///
+/// As with `nuget pack`, a target with the same extension as the source (including none, as
+/// for Unix binaries) is the file's full path, and any other target is a folder. Unlike
+/// `nuget pack`, a target ending with `/` and an empty target are always folders.
+pub(super) fn file_destination(src: &Path, raw_target: &str) -> String {
+    let is_folder = raw_target.ends_with(['/', '\\']);
+    let target = raw_target.trim_matches(['/', '\\']).replace('\\', "/");
+    let name = src
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let same_extension = Path::new(&target)
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        == src.extension().map(|e| e.to_string_lossy().to_lowercase());
+    if !target.is_empty() && !is_folder && same_extension {
+        target
+    } else {
+        join(&target, &name)
+    }
+}
+
+pub(super) fn has_wildcard(s: &str) -> bool {
     s.contains(['*', '?', '['])
 }
 

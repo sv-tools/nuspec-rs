@@ -141,9 +141,23 @@ jobs:
       - name: Run tests
         run: cargo llvm-cov nextest ${{ matrix.args }} --all-targets --no-fail-fast --no-tests=pass --verbose
       # nextest does not execute doctests, so run them with the standard
-      # test harness.
+      # test harness. Bin-only crates (`cargo-nuspec`) have no library target,
+      # and `cargo test --doc` bails with "no library targets found": treat
+      # that specific error as a skip and surface every other failure.
       - name: Run doctests
-        run: cargo test --doc ${{ matrix.args }} --no-fail-fast --verbose
+        shell: bash
+        run: |
+          log=$(cargo test --doc ${{ matrix.args }} --no-fail-fast --verbose 2>&1) || rc=$?
+          rc=${rc:-0}
+          printf '%s\n' "$log"
+          if [[ $rc -eq 0 ]]; then
+            exit 0
+          fi
+          if grep -qF "no library targets found" <<< "$log"; then
+            echo "::notice::doctests skipped — package has no library target"
+            exit 0
+          fi
+          exit $rc
       - name: Prepare coverage report
         if: ${{ !cancelled() }}
         run: cargo llvm-cov report --lcov --output-path coverage.lcov

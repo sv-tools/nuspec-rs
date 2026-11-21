@@ -57,6 +57,7 @@ fn targets(pkg: &Package) -> Vec<String> {
             let name = Path::new(&f.src).file_name().unwrap().to_string_lossy();
             match f.target.as_deref().unwrap_or_default() {
                 "" => name.into_owned(),
+                target if target.ends_with(&*name) => target.to_string(),
                 target => format!("{target}/{name}"),
             }
         })

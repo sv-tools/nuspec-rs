@@ -373,8 +373,19 @@ fn build_package(
         } else {
             normalize(&manifest_dir.join(src))
         };
+        // Spell out where a single file goes, so `nuget pack` cannot read the target
+        // differently (see `push_file`); wildcard targets are always folders.
+        let target = if layout::has_wildcard(&extra.src) {
+            extra.target.clone()
+        } else {
+            Some(layout::file_destination(
+                src.as_std_path(),
+                extra.target.as_deref().unwrap_or_default(),
+            ))
+        };
         files.push(File {
             src: src.into_string(),
+            target,
             ..extra.clone()
         });
     }
@@ -531,14 +542,25 @@ fn normalize(path: &Utf8Path) -> Utf8PathBuf {
     out
 }
 
-fn push_file(files: &mut Vec<File>, src: &Utf8Path, target: &str) {
+/// Adds `src` to the package in the `folder` directory.
+///
+/// The target is written as the full path of the file, not the folder: `nuget pack` treats a
+/// `target` with the same extension as `src` as a file name, which for extensionless binaries
+/// would otherwise turn `tools` into a file.
+fn push_file(files: &mut Vec<File>, src: &Utf8Path, folder: &str) {
+    let name = src.file_name().unwrap_or_default();
+    let target = if folder.is_empty() {
+        name.to_string()
+    } else {
+        format!("{folder}/{name}")
+    };
     let src = src.to_string();
     if files.iter().any(|f| f.src == src) {
         return;
     }
     files.push(File {
         src,
-        target: Some(target.to_string()),
+        target: Some(target),
         exclude: None,
     });
 }
@@ -743,8 +765,11 @@ mod tests {
         assert_eq!(
             files(native),
             vec![
-                pair("/work/demo/README.md", ""),
-                pair("/work/target/release/demo.dll", "runtimes/win-x64/native"),
+                pair("/work/demo/README.md", "README.md"),
+                pair(
+                    "/work/target/release/demo.dll",
+                    "runtimes/win-x64/native/demo.dll"
+                ),
             ]
         );
 
@@ -753,8 +778,8 @@ mod tests {
         assert_eq!(
             files(app),
             vec![
-                pair("/work/demo/README.md", ""),
-                pair("/work/target/release/demo-cli.exe", "tools"),
+                pair("/work/demo/README.md", "README.md"),
+                pair("/work/target/release/demo-cli.exe", "tools/demo-cli.exe"),
             ]
         );
     }
@@ -794,10 +819,16 @@ mod tests {
         assert_eq!(
             files(native),
             vec![
-                pair("/work/demo/README.md", ""),
-                pair("/work/target/release/demo.dll", "runtimes/win-x64/native"),
-                pair("/work/target/release/demo.pdb", "runtimes/win-x64/native"),
-                pair("/work/demo/NOTICE.txt", ""),
+                pair("/work/demo/README.md", "README.md"),
+                pair(
+                    "/work/target/release/demo.dll",
+                    "runtimes/win-x64/native/demo.dll"
+                ),
+                pair(
+                    "/work/target/release/demo.pdb",
+                    "runtimes/win-x64/native/demo.pdb"
+                ),
+                pair("/work/demo/NOTICE.txt", "NOTICE.txt"),
             ]
         );
 
@@ -807,10 +838,10 @@ mod tests {
         assert_eq!(
             files(app),
             vec![
-                pair("/work/demo/README.md", ""),
-                pair("/work/target/release/demo-cli.exe", ""),
-                pair("/work/demo/NOTICE.txt", ""),
-                pair("/abs/run.ps1", "scripts"),
+                pair("/work/demo/README.md", "README.md"),
+                pair("/work/target/release/demo-cli.exe", "demo-cli.exe"),
+                pair("/work/demo/NOTICE.txt", "NOTICE.txt"),
+                pair("/abs/run.ps1", "scripts/run.ps1"),
             ]
         );
     }
@@ -843,8 +874,8 @@ mod tests {
         assert_eq!(
             files(&result[0]),
             vec![
-                pair("/work/demo/LICENSE.txt", ""),
-                pair("/t/libdemo.so", "runtimes/linux-x64/native"),
+                pair("/work/demo/LICENSE.txt", "LICENSE.txt"),
+                pair("/t/libdemo.so", "runtimes/linux-x64/native/libdemo.so"),
             ]
         );
     }
