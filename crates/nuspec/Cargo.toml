@@ -10,6 +10,8 @@ readme.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
+# Real-world .nuspec files used by the tests; not needed by users of the crate.
+exclude = ["tests/fixtures"]
 
 [features]
 default = ["generate"]

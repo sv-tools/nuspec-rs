@@ -3,12 +3,19 @@ use quick_xml::se::Serializer;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
+/// The XML namespace used by `nuget pack` and `dotnet pack` for new packages.
+pub const NUSPEC_NAMESPACE: &str = "http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd";
+
 /// A representation of a NuGet package specification (nuspec).
 ///
 /// See [NuGet documentation](https://docs.microsoft.com/en-us/nuget/reference/nuspec) for more details.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+///
+/// [`Package::default`] sets [`Package::namespace`] to [`NUSPEC_NAMESPACE`]; a parsed file keeps
+/// whatever namespace it declares, including none.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename = "package", deny_unknown_fields)]
 pub struct Package {
+    /// The `xmlns` attribute of the root element.
     #[serde(
         rename = "@xmlns",
         default,
@@ -16,10 +23,22 @@ pub struct Package {
         alias = "xmlns"
     )]
     pub namespace: Option<String>,
+    /// The package metadata.
     #[serde(default)]
     pub metadata: Metadata,
+    /// The files to include in the package.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<Files>,
+}
+
+impl Default for Package {
+    fn default() -> Self {
+        Self {
+            namespace: Some(NUSPEC_NAMESPACE.to_string()),
+            metadata: Metadata::default(),
+            files: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -44,13 +63,28 @@ pub struct Metadata {
     /// A description of the package for UI display.
     ///
     /// When uploading a package to nuget.org, the description field is limited to 4000 characters.
-    #[serde(default, alias = "summary")]
+    #[serde(default)]
     pub description: String,
     /// A comma-separated list of package authors. The authors and the owners from the nuspec are
     /// ignored when uploading the package to nuget.org.
     /// For setting package ownership on nuget.org, see [Managing package owners on nuget.org](https://learn.microsoft.com/en-us/nuget/nuget-org/publish-a-package#managing-package-owners-on-nugetorg).
-    #[serde(default, alias = "owners", with = "comma_separated")]
+    #[serde(default, with = "comma_separated")]
     pub authors: Vec<String>,
+
+    /// A comma-separated list of the package creators using profile names on nuget.org.
+    /// This is often the same list as in authors, and is ignored when uploading the package
+    /// to nuget.org.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "optional_comma_separated"
+    )]
+    pub owners: Option<Vec<String>>,
+
+    /// **Deprecated.** A short description of the package for UI display.
+    /// If omitted, a truncated version of description is used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 
     /// A URL for the package's home page, often shown in UI displays as well as nuget.org.
     ///
@@ -102,6 +136,17 @@ pub struct Metadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<License>,
 
+    /// **Deprecated**, use [`Metadata::license`] instead.
+    /// A URL for the package's license, often shown in UIs like nuget.org.
+    /// `nuget pack` and `dotnet pack` set it to a `https://licenses.nuget.org/...` URL
+    /// when a license expression is used.
+    #[serde(
+        rename = "licenseUrl",
+        skip_serializing_if = "Option::is_none",
+        alias = "license_url"
+    )]
+    pub license_url: Option<String>,
+
     /// It is a path to an image file within the package, often shown in UIs like nuget.org as
     /// the package icon.
     /// Image file size is limited to 1 MB.
@@ -126,6 +171,15 @@ pub struct Metadata {
     /// ```
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+
+    /// **Deprecated**, use [`Metadata::icon`] instead.
+    /// A URL for an image to use as the icon for the package in UI display.
+    #[serde(
+        rename = "iconUrl",
+        skip_serializing_if = "Option::is_none",
+        alias = "icon_url"
+    )]
+    pub icon_url: Option<String>,
 
     /// When packing a readme file, you need to use the readme element to specify the package path,
     /// relative to the root of the package.
@@ -169,9 +223,15 @@ pub struct Metadata {
     #[serde(
         rename = "developmentDependency",
         skip_serializing_if = "Option::is_none",
+        alias = "development_dependency",
         alias = "development_dependencies"
     )]
     pub development_dependency: Option<bool>,
+
+    /// A Boolean value specifying whether the package is serviceable.
+    /// Used by Microsoft packages; not used by nuget.org.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub serviceable: Option<bool>,
 
     /// A description of the changes made in this release of the package,
     /// often used in UI like the Updates tab of the Visual Studio Package Manager in place of
@@ -290,6 +350,15 @@ pub struct Metadata {
         alias = "framework_assemblies"
     )]
     pub framework_assemblies: Option<FrameworkAssemblies>,
+
+    /// Shared frameworks (such as `Microsoft.AspNetCore.App`) that a project consuming
+    /// the package must reference, grouped by target framework (NuGet 5.1+).
+    #[serde(
+        rename = "frameworkReferences",
+        skip_serializing_if = "Option::is_none",
+        alias = "framework_references"
+    )]
+    pub framework_references: Option<FrameworkReferences>,
 
     /// A collection of zero or more `<reference>` elements naming assemblies in the package's lib
     /// folder that are added as project references.
@@ -463,6 +532,8 @@ pub struct DependencyGroup {
     )]
     pub target_framework: Option<String>,
     /// A collection of dependencies for the target framework.
+    /// Empty groups declare a supported framework without dependencies.
+    #[serde(default)]
     pub dependency: Vec<Dependency>,
 }
 
@@ -490,6 +561,36 @@ pub struct FrameworkAssembly {
         alias = "target_framework"
     )]
     pub target_framework: Option<String>,
+}
+
+/// A collection of framework reference groups.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkReferences {
+    /// Framework reference groups, one per target framework.
+    #[serde(default)]
+    pub group: Vec<FrameworkReferenceGroup>,
+}
+
+/// A group of framework references for a single target framework.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkReferenceGroup {
+    /// The target framework of the group, such as `net9.0`.
+    #[serde(rename = "@targetFramework", alias = "target_framework")]
+    pub target_framework: String,
+    /// The shared frameworks referenced for the target framework.
+    #[serde(rename = "frameworkReference", default, alias = "framework_reference")]
+    pub framework_reference: Vec<FrameworkReference>,
+}
+
+/// A reference to a shared framework.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct FrameworkReference {
+    /// The name of the shared framework, such as `Microsoft.AspNetCore.App`.
+    #[serde(rename = "@name", alias = "name")]
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -522,6 +623,7 @@ pub struct ReferenceGroup {
     )]
     pub target_framework: Option<String>,
     /// A collection of references for the target framework.
+    #[serde(default)]
     pub reference: Vec<Reference>,
 }
 
@@ -838,7 +940,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors></metadata></package>"#.to_string()
+            r#"<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -846,22 +948,59 @@ mod tests {
     }
 
     #[test]
-    fn test_owners_deserialization() {
-        let serialized = r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><owners>Author One,Author Two</owners></metadata></package>"#;
+    fn test_owners_and_summary_are_separate_fields() {
+        let serialized = r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><summary>Short</summary><authors>Author One,Author Two</authors><owners>Owner One</owners></metadata></package>"#;
         let deserialized: Package = quick_xml::de::from_str(serialized).unwrap();
+        assert_eq!(deserialized.namespace, None);
+        assert_eq!(
+            deserialized.metadata.description,
+            "An example NuGet package"
+        );
+        assert_eq!(deserialized.metadata.summary.as_deref(), Some("Short"));
         assert_eq!(
             deserialized.metadata.authors,
             vec!["Author One".to_string(), "Author Two".to_string()]
         );
-
-        let serialized = r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><owners>Author One,Author Two</owners><authors>Author Three,Author Four</authors></metadata></package>"#;
-        let deserialized_err = quick_xml::de::from_str::<Package>(serialized).unwrap_err();
-        assert!(
-            deserialized_err
-                .to_string()
-                .contains("duplicate field `authors`"),
-            "must fail on duplicate fields"
+        assert_eq!(
+            deserialized.metadata.owners,
+            Some(vec!["Owner One".to_string()])
         );
+
+        let reserialized = quick_xml::se::to_string(&deserialized).unwrap();
+        let roundtrip: Package = quick_xml::de::from_str(&reserialized).unwrap();
+        assert_eq!(roundtrip, deserialized);
+    }
+
+    #[test]
+    fn test_framework_references_serialization_deserialization() {
+        let nuspec = Package {
+            metadata: Metadata {
+                id: "example-package".to_string(),
+                version: "1.0.0".to_string(),
+                description: "An example NuGet package".to_string(),
+                authors: vec!["Author One".to_string()],
+                serviceable: Some(true),
+                framework_references: Some(FrameworkReferences {
+                    group: vec![FrameworkReferenceGroup {
+                        target_framework: "net9.0".to_string(),
+                        framework_reference: vec![FrameworkReference {
+                            name: "Microsoft.AspNetCore.App".to_string(),
+                        }],
+                    }],
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let serialized = quick_xml::se::to_string(&nuspec).unwrap();
+        assert_eq!(
+            serialized,
+            r#"<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One</authors><serviceable>true</serviceable><frameworkReferences><group targetFramework="net9.0"><frameworkReference name="Microsoft.AspNetCore.App"/></group></frameworkReferences></metadata></package>"#
+        );
+
+        let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, nuspec);
     }
 
     #[test]
@@ -881,7 +1020,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><license type="expression">MIT</license></metadata></package>"#.to_string()
+            r#"<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><license type="expression">MIT</license></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -902,7 +1041,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><license type="file">LICENSE-MIT</license></metadata></package>"#.to_string()
+            r#"<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><license type="file">LICENSE-MIT</license></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -926,7 +1065,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><tags>tag1 tag2</tags></metadata></package>"#.to_string()
+            r#"<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><tags>tag1 tag2</tags></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -947,7 +1086,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><tags/></metadata></package>"#.to_string()
+            r#"<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><tags/></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -994,7 +1133,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><packageTypes><packageType name="Dependency" version="1.0"/><packageType name="DotnetTool"/><packageType name="MSBuildSdk"/><packageType name="Template"/><packageType name="ContosoExtension"/></packageTypes></metadata></package>"#.to_string()
+            r#"<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><packageTypes><packageType name="Dependency" version="1.0"/><packageType name="DotnetTool"/><packageType name="MSBuildSdk"/><packageType name="Template"/><packageType name="ContosoExtension"/></packageTypes></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -1031,7 +1170,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors></metadata><files><file src="content/one.txt" target="content/one.txt"/><file src="content/two.txt" target="content/two.txt" exclude="*.tmp;*.bak"/></files></package>"#.to_string()
+            r#"<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors></metadata><files><file src="content/one.txt" target="content/one.txt"/><file src="content/two.txt" target="content/two.txt" exclude="*.tmp;*.bak"/></files></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -1071,7 +1210,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><dependencies><dependency id="SomeDependency" version="1.2.3" include="runtime,compile" exclude="build"/><dependency id="AnotherDependency" version="[2.0,3.0)"/></dependencies></metadata></package>"#.to_string()
+            r#"<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><dependencies><dependency id="SomeDependency" version="1.2.3" include="runtime,compile" exclude="build"/><dependency id="AnotherDependency" version="[2.0,3.0)"/></dependencies></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -1132,11 +1271,25 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><dependencies><group targetFramework="netstandard2.0"><dependency id="SomeDependency" version="1.2.3" include="runtime,compile" exclude="build"/><dependency id="AnotherDependency" version="[2.0,3.0)"/></group><group targetFramework="net5.0"><dependency id="YetAnotherDependency" version="4.5.6" include="runtime"/></group><group><dependency id="NoTargetFrameworkDependency" version="0.1.0"/></group></dependencies></metadata></package>"#.to_string()
+            r#"<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><dependencies><group targetFramework="netstandard2.0"><dependency id="SomeDependency" version="1.2.3" include="runtime,compile" exclude="build"/><dependency id="AnotherDependency" version="[2.0,3.0)"/></group><group targetFramework="net5.0"><dependency id="YetAnotherDependency" version="4.5.6" include="runtime"/></group><group><dependency id="NoTargetFrameworkDependency" version="0.1.0"/></group></dependencies></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
         assert_eq!(deserialized, nuspec);
+    }
+
+    #[test]
+    fn test_empty_groups_serialization_deserialization() {
+        let serialized = r#"<package><metadata><id>a</id><version>1.0.0</version><description>d</description><authors>x</authors><dependencies><group targetFramework="net8.0"/></dependencies><references><group targetFramework="net8.0"/></references></metadata></package>"#;
+        let deserialized: Package = quick_xml::de::from_str(serialized).unwrap();
+        let dependencies = deserialized.metadata.dependencies.as_ref().unwrap();
+        let group = &dependencies.group.as_ref().unwrap()[0];
+        assert_eq!(group.target_framework.as_deref(), Some("net8.0"));
+        assert!(group.dependency.is_empty());
+        let references = deserialized.metadata.references.as_ref().unwrap();
+        assert!(references.group.as_ref().unwrap()[0].reference.is_empty());
+
+        assert_eq!(quick_xml::se::to_string(&deserialized).unwrap(), serialized);
     }
 
     #[test]
@@ -1167,7 +1320,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><frameworkAssemblies><frameworkAssembly assemblyName="System.Xml" targetFramework="netstandard2.0"/><frameworkAssembly assemblyName="Newtonsoft.Json"/></frameworkAssemblies></metadata></package>"#.to_string()
+            r#"<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><frameworkAssemblies><frameworkAssembly assemblyName="System.Xml" targetFramework="netstandard2.0"/><frameworkAssembly assemblyName="Newtonsoft.Json"/></frameworkAssemblies></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -1201,7 +1354,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><references><reference file="SomeAssembly.dll"/><reference file="AnotherAssembly.dll"/></references></metadata></package>"#.to_string()
+            r#"<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><references><reference file="SomeAssembly.dll"/><reference file="AnotherAssembly.dll"/></references></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -1238,7 +1391,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><references><group targetFramework="netstandard2.0"><reference file="NetStandardAssembly.dll"/></group><group targetFramework="net5.0"><reference file="Net5Assembly.dll"/></group></references></metadata></package>"#.to_string()
+            r#"<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><references><group targetFramework="netstandard2.0"><reference file="NetStandardAssembly.dll"/></group><group targetFramework="net5.0"><reference file="Net5Assembly.dll"/></group></references></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
@@ -1278,7 +1431,7 @@ mod tests {
         let serialized = quick_xml::se::to_string(&nuspec).unwrap();
         assert_eq!(
             serialized,
-            r#"<package><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><contentFiles><files include="contentFiles/one.txt" buildAction="Content" copyToOutput="true" flatten="false"/><files include="contentFiles/two.txt" exclude="*.tmp;*.bak" buildAction="Compile"/></contentFiles></metadata></package>"#.to_string()
+            r#"<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"><metadata><id>example-package</id><version>1.0.0</version><description>An example NuGet package</description><authors>Author One,Author Two</authors><contentFiles><files include="contentFiles/one.txt" buildAction="Content" copyToOutput="true" flatten="false"/><files include="contentFiles/two.txt" exclude="*.tmp;*.bak" buildAction="Compile"/></contentFiles></metadata></package>"#.to_string()
         );
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();

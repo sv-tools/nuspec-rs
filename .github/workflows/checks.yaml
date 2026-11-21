@@ -37,6 +37,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: sv-tools/rust-metadata-action@56f5f4f6a41e50d5f5f440bd81c0ed041f9b8dfb # v1.2.3
         id: rustmeta
+        with:
+          # `default` only enables `generate`, which has its own row.
+          matrix-exclude-features: nuspec:default
   BuildJob:
     name: Build per Package and Feature
     needs: RustMeta
