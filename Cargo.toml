@@ -9,7 +9,7 @@ authors = ["Sergey Vilgelm <sergey@vilgelm.com>"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/sv-tools/nuspec-rs"
-keywords = ["nuspec", "nuget", "nupkg"]
+keywords = ["nuspec", "nuget", "nupkg", "dotnet"]
 categories = ["development-tools::build-utils"]
 version = "0.3.0"
 
