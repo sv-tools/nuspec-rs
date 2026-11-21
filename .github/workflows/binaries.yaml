@@ -1,0 +1,109 @@
+name: Binaries
+
+# Builds the `cargo-nuspec` release archives for every supported target and
+# uploads them as `cargo-nuspec-<target>` workflow artifacts. Called by
+# `release-stage.yaml`, which signs them and attaches them to the draft
+# release; runs on pull requests that change this file so a broken target
+# shows up before a release.
+#
+# Archives are `cargo-nuspec-<version>-<target>.tar.gz` (`.zip` on Windows)
+# with the binary, README and licenses at the root, plus a `<archive>.sha256`
+# file. The names are what `[package.metadata.binstall]` in
+# `crates/cargo-nuspec/Cargo.toml` and the Homebrew formula in `publish.yaml`
+# expect: keep them in sync.
+
+on:
+  workflow_call:
+  pull_request:
+    branches: [ "main" ]
+    paths: [ ".github/workflows/binaries.yaml" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  Build:
+    name: Build ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # musl: static binaries that run on any distribution, including
+          # Alpine-based CI images. Every dependency is pure Rust.
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          # Cross-compiled on the arm64 runner: Xcode's SDK covers both
+          # architectures, and there are no framework dependencies.
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            cross: true
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          target: ${{ matrix.target }}
+          # Warnings must not fail a release build.
+          rustflags: ""
+      - name: Build release binary
+        run: cargo build --release --locked --package cargo-nuspec --target ${{ matrix.target }}
+      # Package the test crate with the binary just built, so a binary that
+      # starts but cannot run `cargo build` is caught here.
+      - name: Smoke test
+        if: ${{ !matrix.cross }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="target/${{ matrix.target }}/release/cargo-nuspec"
+          "$bin" nuspec --version
+          "$bin" nuspec --package nuspec-test --pack --out-dir smoke
+          ls smoke/*.nupkg
+      - name: Pack archive
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "cargo-nuspec") | .version')
+          name="cargo-nuspec-${version}-${{ matrix.target }}"
+          dir="target/${{ matrix.target }}/release"
+          files=(README.md LICENSE-MIT LICENSE-APACHE)
+          mkdir pkg
+          cp "${files[@]}" pkg/
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cp "$dir/cargo-nuspec.exe" pkg/
+            archive="$name.zip"
+            (cd pkg && 7z a -tzip "../$archive" cargo-nuspec.exe "${files[@]}" >/dev/null)
+          else
+            cp "$dir/cargo-nuspec" pkg/
+            archive="$name.tar.gz"
+            tar -C pkg -czf "$archive" cargo-nuspec "${files[@]}"
+          fi
+          # `<sha>  <archive>`, as `shasum -a 256` writes it. macOS has only
+          # `shasum`, Git Bash on Windows only `sha256sum`.
+          if command -v sha256sum >/dev/null; then
+            sum=$(sha256sum < "$archive")
+          else
+            sum=$(shasum -a 256 < "$archive")
+          fi
+          printf '%s  %s\n' "${sum%% *}" "$archive" > "$archive.sha256"
+          cat "$archive.sha256"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cargo-nuspec-${{ matrix.target }}
+          path: |
+            ${{ steps.pack.outputs.archive }}
+            ${{ steps.pack.outputs.archive }}.sha256
+          if-no-files-found: error

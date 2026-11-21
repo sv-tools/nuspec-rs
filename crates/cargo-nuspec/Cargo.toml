@@ -23,3 +23,16 @@ zip.workspace = true
 
 [lints]
 workspace = true
+
+# Prebuilt archives attached to the `cargo-nuspec/v<version>` GitHub releases by
+# `.github/workflows/release-stage.yaml`.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/cargo-nuspec/v{ version }/{ name }-{ version }-{ target }{ archive-suffix }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
+
+[package.metadata.binstall.overrides.aarch64-pc-windows-msvc]
+pkg-fmt = "zip"

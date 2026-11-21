@@ -5,9 +5,15 @@ and binaries to distribute as apps or services.
 
 ## `cargo nuspec`
 
-```sh
-cargo install cargo-nuspec
+Install a prebuilt binary, or build it from source:
 
+```sh
+cargo binstall cargo-nuspec
+brew install sv-tools/apps/cargo-nuspec
+cargo install cargo-nuspec
+```
+
+```sh
 # Build in release mode and write target/nuspec/<id>.nuspec for every package
 cargo nuspec --release
 
@@ -51,6 +57,21 @@ id = "Contoso.Engine"
 bins = ["engine"]
 layout = "root"                     # binaries in the package root instead of tools/
 files = [{ src = "deploy/*.ps1", target = "scripts" }]
+```
+
+### Verifying the binaries
+
+The archives on the [releases page](https://github.com/sv-tools/nuspec-rs/releases) come with
+a SHA-256 checksum, a [Sigstore](https://www.sigstore.dev) signature bundle made by the release
+workflow, and SLSA build provenance:
+
+```sh
+gh attestation verify cargo-nuspec-<version>-<target>.tar.gz --repo sv-tools/nuspec-rs
+
+cosign verify-blob --bundle cargo-nuspec-<version>-<target>.tar.gz.bundle \
+  --certificate-identity-regexp '^https://github.com/sv-tools/nuspec-rs/\.github/workflows/release-stage\.yaml@refs/tags/cargo-nuspec/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  cargo-nuspec-<version>-<target>.tar.gz
 ```
 
 ## Crates
