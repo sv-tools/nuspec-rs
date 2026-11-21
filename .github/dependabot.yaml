@@ -8,7 +8,16 @@ updates:
       ci:
         patterns:
           - "*"
+    cooldown:
+      default-days: 7
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
       interval: "daily"
+    groups:
+      rust:
+        patterns:
+          - "*"
+        update-types: [ "major", "minor", "patch" ]
+    cooldown:
+      default-days: 7

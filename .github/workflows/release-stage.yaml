@@ -1,0 +1,41 @@
+name: Release stage
+
+# Tag-push half of the release flow: run full Checks and mint a *draft*
+# GitHub Release. Nothing ships externally here — crates.io publishing lives
+# in `publish.yaml` and fires when the draft is reviewed and published.
+
+on:
+  push:
+    # Tags are `<crate>/v<x.y.z>`. GitHub tag filters are globs, not regexes.
+    tags: [ "**/v[0-9]*.[0-9]*.[0-9]*" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions: read-all
+
+jobs:
+  Checks:
+    # `OsvScanner` inside the reusable workflow needs `security-events: write`
+    # for SARIF upload; reusable workflows can't escalate beyond the caller.
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/checks.yaml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  DraftRelease:
+    needs: Checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Releases API
+    steps:
+      - name: Create draft GitHub Release
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          draft: true
+          # The repo will carry several crates with their own tags; don't let
+          # any one release hijack the repo-wide "Latest" badge.
+          make_latest: false

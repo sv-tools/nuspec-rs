@@ -4,6 +4,7 @@ members = ["crates/nuspec", "crates/nuspec-test"]
 
 [workspace.package]
 edition = "2024"
+rust-version = "1.86"
 authors = ["Sergey Vilgelm <sergey@vilgelm.com>"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
@@ -11,3 +12,15 @@ repository = "https://github.com/sv-tools/nuspec-rs"
 keywords = ["nuspec", "nuget", "nupkg"]
 categories = ["development-tools::build-utils"]
 version = "0.2.0"
+
+[workspace.dependencies]
+nuspec = { path = "crates/nuspec", version = "0.2.0" }
+quick-xml = { version = "0.42.0", features = ["serialize"] }
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.2.2"
+
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

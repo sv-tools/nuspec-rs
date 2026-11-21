@@ -2,6 +2,7 @@
 name = "nuspec-test"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 readme.workspace = true
@@ -17,14 +18,14 @@ path = "src/main.rs"
 
 [[bin]]
 name = "nuspec_test_bin_2"
-path = "src/main.rs"
+path = "src/bin2.rs"
 
 [lib]
 name = "nuspec_test_lib"
 crate-type = ["cdylib", "rlib", "staticlib"]
 
 [build-dependencies]
-nuspec = { path = "../nuspec" }
+nuspec.workspace = true
 
 # All fields must be in the camelCase format (same as in the xml file)
 [package.metadata.nuspec.package.metadata]
@@ -35,3 +36,6 @@ src = "../../LICENSE-MIT"
 
 [[package.metadata.nuspec.package.files.file]]
 src = "../../LICENSE-APACHE"
+
+[lints]
+workspace = true
