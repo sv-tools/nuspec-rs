@@ -5,94 +5,280 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
   workflow_call:
     secrets:
       CODECOV_TOKEN:
         required: true
+    outputs:
+      publish:
+        value: ${{ jobs.RustMeta.outputs.publish }}
   schedule:
-    - cron: "0 0 * * 0"
+    - cron: "0 4 * * 1" # Mondays 04:00 UTC
 
 env:
   CARGO_TERM_COLOR: always
 
-permissions: read-all
+# Every job here just clones the repo and runs cargo. Jobs that need more
+# (`OsvScanner*` for SARIF upload) declare it per-job.
+permissions:
+  contents: read
 
 jobs:
+  RustMeta:
+    name: Collect crate metadata
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.rustmeta.outputs.matrix }}
+      packages: ${{ steps.rustmeta.outputs.packages }}
+      publish: ${{ steps.rustmeta.outputs.publish }}
+      rust-version: ${{ steps.rustmeta.outputs.rust-version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: sv-tools/rust-metadata-action@56f5f4f6a41e50d5f5f440bd81c0ed041f9b8dfb # v1.2.3
+        id: rustmeta
+  BuildJob:
+    name: Build per Package and Feature
+    needs: RustMeta
+    strategy:
+      matrix:
+        args: ${{ fromJSON(needs.RustMeta.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+      - run: cargo build ${{ matrix.args }} --all-targets --verbose
+  IsolatedBuildJob:
+    name: Build per Package with each Feature alone
+    needs: RustMeta
+    # Builds each feature on its own, and no features at all, with warnings
+    # denied, so code left behind a `cfg` (e.g. `nuspec` without `generate`)
+    # is not silently broken.
+    strategy:
+      matrix:
+        package: ${{ fromJSON(needs.RustMeta.outputs.packages) }}
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+      - name: Build with no features, then with each one alone
+        shell: bash
+        run: |
+          set -euo pipefail
+          package='${{ matrix.package }}'
+          echo "::group::${package} (no features)"
+          cargo build --package "$package" --no-default-features --all-targets --verbose
+          echo "::endgroup::"
+          features=$(cargo metadata --format-version 1 --no-deps \
+            | jq -r --arg p "$package" '.packages[]
+                | select(.name == $p)
+                | .features
+                | keys[]
+                | select(. != "default")')
+          for feature in $features; do
+            echo "::group::${package} --features=${feature}"
+            cargo build --package "$package" --no-default-features --features "$feature" --all-targets --verbose
+            echo "::endgroup::"
+          done
+  MSRV:
+    name: Check the minimum supported Rust version
+    needs: RustMeta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+        with:
+          toolchain: ${{ needs.RustMeta.outputs.rust-version }}
+      - run: cargo check --workspace --all-features --all-targets --verbose
   Build:
+    name: Wait for build jobs to finish
+    needs: [BuildJob, IsolatedBuildJob, MSRV]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v5.5.0
-      - run: cargo build --all-features --verbose
+      - run: echo "Build jobs succeeded"
   Format:
+    name: Check Rust code formatting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v5.5.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
       - run: cargo fmt --all --check --verbose
   Clippy:
+    name: Check Rust code with Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v5.5.0
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          cache-targets: false
-          cache-all-crates: true
-      - run: cargo tools
-      - run: cargo clippy --all-features --verbose -- --deny warnings
-      - run: cargo clippy --all-features --quiet --message-format=json | cargo-action-fmt
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+      - run: cargo install-tools
+      - run: cargo clippy --all-features --all-targets --verbose -- --deny warnings
+      - run: cargo clippy --all-features --all-targets --quiet --message-format=json | cargo-action-fmt
         if: failure()
-  Tests:
+  Docs:
+    name: Check rustdoc
+    runs-on: ubuntu-latest
+    env:
+      # Broken intra-doc links, bare URLs and malformed HTML in doc comments
+      # are warnings by default; docs.rs renders them wrong rather than
+      # failing, so make them fatal here instead.
+      RUSTDOCFLAGS: --deny warnings
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+      - run: cargo doc --workspace --all-features --no-deps --verbose
+  TestJob:
+    name: Test per Package and Feature
+    needs: RustMeta
+    strategy:
+      matrix:
+        args: ${{ fromJSON(needs.RustMeta.outputs.matrix) }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v5.5.0
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          cache-targets: false
-          cache-all-crates: true
-      - run: cargo tools
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+      - run: cargo install-tools
       - name: Run tests
-        run: cargo llvm-cov nextest --all-features --no-fail-fast --verbose
+        run: cargo llvm-cov nextest ${{ matrix.args }} --all-targets --no-fail-fast --no-tests=pass --verbose
+      # nextest does not execute doctests, so run them with the standard
+      # test harness.
+      - name: Run doctests
+        run: cargo test --doc ${{ matrix.args }} --no-fail-fast --verbose
       - name: Prepare coverage report
         if: ${{ !cancelled() }}
         run: cargo llvm-cov report --lcov --output-path coverage.lcov
-      - name: Upload coverage reports to Codecov
+      # Not sent to Codecov from here: each upload makes Codecov recompute its
+      # statuses, so the `Coverage` job below sends all of them at once.
+      - name: Store coverage and test reports
         if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: coverage-test-${{ strategy.job-index }}
+          path: |
+            coverage.lcov
+            target/nextest/default/junit.xml
+          retention-days: 1
+  Coverage:
+    name: Publish coverage to Codecov
+    # Deliberately not part of `AllChecks`: the Codecov statuses are
+    # informational.
+    needs: [TestJob]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      # Codecov resolves the report paths against the repository tree.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-*
+          path: coverage-reports
+      - name: List the reports
+        id: reports
+        run: |
+          set -euo pipefail
+          mkdir -p coverage-reports
+          list() { find coverage-reports -type f -name "$1" | sort | paste -sd, -; }
+          echo "lcov=$(list coverage.lcov)" >> "$GITHUB_OUTPUT"
+          echo "junit=$(list junit.xml)" >> "$GITHUB_OUTPUT"
+          find coverage-reports -type f | sort
+      - name: Upload coverage reports to Codecov
+        if: ${{ steps.reports.outputs.lcov != '' }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: ${{ steps.reports.outputs.lcov }}
+          disable_search: true
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
       - name: Upload test results to Codecov
-        if: ${{ !cancelled() }}
-        uses: codecov/test-results-action@0fa95f0e1eeaafde2c782583b36b28ad0d8c77d3 # v1.2.1
+        if: ${{ steps.reports.outputs.junit != '' }}
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          report_type: test_results
+          files: ${{ steps.reports.outputs.junit }}
+          disable_search: true
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-  Deps:
+  Tests:
+    name: Wait for testing jobs to finish
+    needs: [TestJob]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v5.5.0
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          cache-targets: false
-          cache-all-crates: true
-      - run: cargo tools
+      - run: echo "Testing jobs succeeded"
+  Deps:
+    name: Check dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+      - run: cargo install-tools
       - name: Machete
         run: cargo machete
       - name: Deny
         run: cargo deny check all
+  OsvScannerPR:
+    name: OSV Scanner (PR diff)
+    # Diffs base branch deps vs PR head and annotates newly introduced
+    # vulnerable deps. On every other event `OsvScanner` does a flat scan.
+    if: github.event_name == 'pull_request'
+    permissions:
+      actions: read
+      contents: read
+      security-events: write # SARIF upload to the Security tab
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
+  OsvScanner:
+    name: OSV Scanner
+    if: github.event_name != 'pull_request'
+    permissions:
+      actions: read
+      contents: read
+      security-events: write # SARIF upload to the Security tab
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
   PublishCrateJob:
-    strategy:
-      matrix:
-        crate: [ "nuspec" ]
+    name: Test publishing bumped crates
+    needs: RustMeta
+    # `publish` is `'[]'` on commits that don't bump any crate version.
+    if: ${{ needs.RustMeta.outputs.publish != '[]' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v5.5.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+      # All bumped crates go into one cargo invocation so cargo stages
+      # siblings in a local registry and orders them by dependency.
+      - name: Build the package flag list
+        id: packages
+        env:
+          PUBLISH: ${{ needs.RustMeta.outputs.publish }}
+        run: |
+          set -euo pipefail
+          flags="$(jq -j '.[] | "--package \(.) "' <<<"$PUBLISH")"
+          echo "flags=$flags" >> "$GITHUB_OUTPUT"
+          echo "batch: $flags"
       - name: Dry run publish
-        run: cargo publish --all-features --package ${{ matrix.crate }} --dry-run --verbose
-      - name: Create package
-        run: cargo package --all-features --package ${{ matrix.crate }} --verbose
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        run: |
+          set -euo pipefail
+          cargo publish --all-features ${{ steps.packages.outputs.flags }} \
+            --dry-run --verbose 2>&1 | tee "$RUNNER_TEMP/publish-dry-run.log"
+      - name: Report the release order
+        run: |
+          set -euo pipefail
+          {
+            echo "### Release order"
+            echo
+            echo "One crate per tag, resolved from crates.io — push in this order:"
+            echo
+            echo '```sh'
+            sed -n 's|^ *Uploading \([^ ]*\) v\([^ ]*\) .*|git push origin \1/v\2|p' \
+              "$RUNNER_TEMP/publish-dry-run.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Create packages
+        run: cargo package --all-features ${{ steps.packages.outputs.flags }} --verbose
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ matrix.crate }}-crate
-          path: target/package/${{ matrix.crate }}-*.crate
+          name: packaged-crates
+          path: target/package/*.crate
   PublishNugetJob:
+    name: Pack the test crate as a NuGet package
     strategy:
       matrix:
         crate: [ "nuspec-test" ]
@@ -100,24 +286,50 @@ jobs:
       fail-fast: false
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v5.5.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
       - run: sudo apt install mono-devel
         if: ${{ matrix.os == 'ubuntu-latest' }}
       - run: brew install mono
         if: ${{ matrix.os == 'macos-latest' }}
-      - uses: NuGet/setup-nuget@12c57947e9458a5b976961b08ea0706a17dd71ae  # v3.0.0
+      - uses: NuGet/setup-nuget@fd55a6f3b34392fa83fde1454582407d8c714123 # v4.0
       - run: cargo build --package ${{ matrix.crate }} --verbose --release
       - run: ls ./target/release
       - run: cat ./target/release/${{ matrix.crate }}.nuspec
       - run: nuget pack ./target/release/${{ matrix.crate }}.nuspec
-      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.crate }}-${{ matrix.os }}-nuget
           path: ./${{ matrix.crate }}.*.nupkg
   Publish:
+    name: Wait for publishing jobs to finish
     needs:
-      - PublishNugetJob
+      - RustMeta
       - PublishCrateJob
+      - PublishNugetJob
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Publishing Passed"
+      - name: Check status
+        if: ${{ needs.PublishNugetJob.result != 'success' || (needs.RustMeta.outputs.publish != '[]' && needs.PublishCrateJob.result != 'success') }}
+        run: exit 1
+  AllChecks:
+    name: All checks
+    needs:
+      - Build
+      - Format
+      - Clippy
+      - Docs
+      - Tests
+      - Deps
+      - OsvScannerPR
+      - OsvScanner
+      - Publish
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      # Exactly one of `OsvScannerPR` / `OsvScanner` is skipped per event, so
+      # a `skipped` result is expected here.
+      - name: Verify all checks succeeded
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: exit 1

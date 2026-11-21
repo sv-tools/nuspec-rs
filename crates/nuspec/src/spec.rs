@@ -265,7 +265,7 @@ pub struct Metadata {
     )]
     pub min_client_version: Option<String>,
 
-    /// A collection of zero or more <packageType> elements specifying the type of the package
+    /// A collection of zero or more `<packageType>` elements specifying the type of the package
     /// if other than a traditional dependency package.
     /// Each packageType has attributes of name and version
     #[serde(
@@ -275,12 +275,12 @@ pub struct Metadata {
     )]
     pub package_types: Option<PackageTypes>,
 
-    /// A collection of zero or more <dependency> elements specifying the dependencies for the package.
+    /// A collection of zero or more `<dependency>` elements specifying the dependencies for the package.
     /// Each dependency has attributes of id, version, include (3.x+), and exclude (3.x+).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dependencies: Option<Dependencies>,
 
-    /// A collection of zero or more <frameworkAssembly> elements identifying .NET Framework
+    /// A collection of zero or more `<frameworkAssembly>` elements identifying .NET Framework
     /// assembly references that this package requires, which ensures that references are added to
     /// projects consuming the package.
     /// Each frameworkAssembly has `assemblyName` and `targetFramework` attributes.
@@ -291,16 +291,16 @@ pub struct Metadata {
     )]
     pub framework_assemblies: Option<FrameworkAssemblies>,
 
-    /// A collection of zero or more <reference> elements naming assemblies in the package's lib
+    /// A collection of zero or more `<reference>` elements naming assemblies in the package's lib
     /// folder that are added as project references.
     /// Each reference has a file attribute.
-    /// <references> can also contain a <group> element with a targetFramework attribute,
-    /// that then contains <reference> elements.
+    /// `<references>` can also contain a `<group>` element with a targetFramework attribute,
+    /// that then contains `<reference>` elements.
     /// If omitted, all references in lib are included.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub references: Option<References>,
 
-    /// A collection of <files> elements that identify content files to include in the consuming project.
+    /// A collection of `<files>` elements that identify content files to include in the consuming project.
     /// These files are specified with a set of attributes that describe how they should be used
     /// within the project system.
     #[serde(
