@@ -114,7 +114,8 @@ enum NuspecCommand {
 ///
 /// The packages must have the same id, version and metadata, as the native packages
 /// `cargo nuspec` builds on each platform do: their `runtimes/<rid>/native/` folders are
-/// combined. Files present in several packages, such as the readme, must be identical.
+/// combined. Files present in several packages, such as the readme, must be identical
+/// (line endings aside).
 /// Writes the merged package staged in `<out-dir>/<id>/`, and with `--pack` also the `.nupkg`.
 #[derive(Debug, Args)]
 struct MergeArgs {
@@ -560,6 +561,47 @@ mod tests {
                 "a"
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn test_read_input() {
+        let temp = TempDir::new().unwrap();
+        let dir = temp.0.join("staged");
+        fs::create_dir_all(&dir).unwrap();
+        let package = nuspec::Package {
+            metadata: nuspec::Metadata {
+                id: "Demo".to_string(),
+                version: "1.0.0".to_string(),
+                description: "d".to_string(),
+                authors: vec!["a".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let err = read_input(&dir, &temp.0.join("x")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "expected one .nuspec in the directory, found 0"
+        );
+
+        let nuspec = dir.join("Demo.nuspec");
+        fs::write(&nuspec, package.to_xml().unwrap()).unwrap();
+        let (read, base) = read_input(&nuspec, &temp.0.join("x")).unwrap();
+        assert_eq!((read.metadata.id.as_str(), base), ("Demo", dir.clone()));
+        let (_, base) = read_input(&dir, &temp.0.join("x")).unwrap();
+        assert_eq!(base, dir);
+
+        fs::write(dir.join("Other.nuspec"), "").unwrap();
+        let err = read_input(&dir, &temp.0.join("x")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "expected one .nuspec in the directory, found 2"
+        );
+        let err = read_input(&dir.join("Demo.txt"), &temp.0.join("x")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "expected a .nupkg, a .nuspec or a staged directory"
         );
     }
 

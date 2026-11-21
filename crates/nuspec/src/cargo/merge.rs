@@ -15,8 +15,10 @@ use zip::ZipArchive;
 ///
 /// Each input is a package and the base directory its relative `src` paths are resolved
 /// against (the directory of its `.nuspec`, as for [`pack`](super::pack)). A file found in
-/// several inputs at the same path, such as the readme or the license, is kept once if the
-/// contents are identical; different contents are a [`LayoutError::Conflict`]. The result
+/// several inputs at the same path, such as the readme or the license, is kept once (from the
+/// first input) if the contents are identical, ignoring the difference between `\r\n` and `\n`
+/// line endings that a checkout on Windows introduces; different contents are a
+/// [`LayoutError::Conflict`]. The result
 /// lists every file by its absolute (or base-relative) source path and full target path, ready
 /// for [`stage`](super::stage) or [`pack`](super::pack) with an empty base.
 pub fn merge(inputs: &[(Package, PathBuf)]) -> Result<Package, LayoutError> {
@@ -73,7 +75,17 @@ fn same_content(a: &Path, b: &Path) -> Result<bool, LayoutError> {
             source,
         })
     };
-    Ok(read(a)? == read(b)?)
+    let (a, b) = (read(a)?, read(b)?);
+    Ok(a == b || without_cr(&a).eq(without_cr(&b)))
+}
+
+/// The bytes with every `\r` of a `\r\n` removed.
+fn without_cr(bytes: &[u8]) -> impl Iterator<Item = u8> + '_ {
+    bytes
+        .iter()
+        .enumerate()
+        .filter(|&(i, &b)| !(b == b'\r' && bytes.get(i + 1) == Some(&b'\n')))
+        .map(|(_, &b)| b)
 }
 
 /// Extracts the `.nupkg` at `nupkg` into `dir`, laid out as in the package, and writes
@@ -340,6 +352,22 @@ mod tests {
     fn test_merge_errors() {
         let tmp = TempDir::new("errors");
         let (linux, linux_dir) = platform(&tmp, "linux-x64", "libdemo.so");
+
+        // Line endings alone are not a difference.
+        let crlf = tmp.write("crlf/README.md", "line 1\r\nline 2\r\n");
+        let lf = tmp.write("lf/README.md", "line 1\nline 2\n");
+        let readme = |src: &str| package(vec![file(src, "README.md")]);
+        let merged = merge(&[
+            (readme(&crlf), PathBuf::new()),
+            (readme(&lf), PathBuf::new()),
+        ])
+        .unwrap();
+        assert_eq!(targets(&merged), ["README.md"]);
+        let cr = tmp.write("cr/README.md", "line 1\rline 2\r");
+        assert!(matches!(
+            merge(&[(readme(&lf), PathBuf::new()), (readme(&cr), PathBuf::new())]),
+            Err(LayoutError::Conflict(_))
+        ));
 
         // The same path with different contents.
         let other = tmp.write("other/libdemo.so", "different");

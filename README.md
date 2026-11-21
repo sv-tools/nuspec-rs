@@ -73,7 +73,7 @@ cargo nuspec merge --pack --out-dir merged linux/MyLib.1.0.0.nupkg win/MyLib.1.0
 ```
 
 The inputs can be `.nupkg` files, `.nuspec` files or staged directories. The packages must have
-the same id, version and metadata, and files they share, such as the readme, must be identical.
+the same id, version and metadata, and files they share, such as the readme, must be identical (line endings aside).
 The merged package is staged in `merged/<id>/`, so its files can be signed before packing it.
 
 ### Verifying the binaries
