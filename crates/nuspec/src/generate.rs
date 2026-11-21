@@ -1,6 +1,5 @@
-use crate::{File, Files, License, Package, Repository, to_string_indent};
+use crate::{File, Files, License, NUSPEC_NAMESPACE, Package, Repository};
 use serde::Deserialize;
-use std::io::Write;
 use std::{env, error, fs, io, path};
 
 /// Generates a NuSpec file based on the Cargo package metadata.
@@ -20,14 +19,11 @@ pub fn generate() -> Result<(), Box<dyn error::Error>> {
 /// Generates a NuSpec file and writes it to the specified output directory.
 pub fn generate_to(out_dir: path::PathBuf) -> Result<(), Box<dyn error::Error>> {
     let pkg = load_package_config(out_dir.clone())?;
+    pkg.validate()?;
     let file_name = out_dir
         .join(pkg.metadata.id.clone())
         .with_extension("nuspec");
-    let serialized = to_string_indent(&pkg, ' ', 2)?;
-    let mut file = fs::File::create(file_name.clone())?;
-    file.write_all(r#"<?xml version="1.0" encoding="utf-8"?>"#.as_bytes())?;
-    file.write_all(b"\n")?;
-    file.write_all(serialized.as_bytes())?;
+    pkg.write_to(io::BufWriter::new(fs::File::create(file_name)?))?;
 
     Ok(())
 }
@@ -128,6 +124,9 @@ fn load_package_config(out_dir: path::PathBuf) -> Result<Package, Box<dyn error:
         return Err(format!("The `out_dir` is not a directory: {out_dir:?}").into());
     }
     let mut pkg = nuspec_config.package.clone().unwrap_or_default();
+    if pkg.namespace.is_none() {
+        pkg.namespace = Some(NUSPEC_NAMESPACE.to_string());
+    }
     let mut files = pkg.files.unwrap_or_default().file;
     for file in files.iter_mut() {
         let file_path = path::PathBuf::from(&file.src);
