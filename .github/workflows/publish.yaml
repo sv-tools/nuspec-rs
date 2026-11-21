@@ -36,7 +36,7 @@ jobs:
           ref: ${{ steps.tag.outputs.tag }}
       # Fails unless the tag is `<crate>/v<x.y.z>` for a publishable crate at
       # that Cargo.toml version.
-      - uses: sv-tools/rust-metadata-action@911f68d27616d2824bcaadfac48ffa32d48055e5 # v1.3.0
+      - uses: sv-tools/rust-metadata-action@4020eda3b8b92b4cc9835dfe8d792ec2ace4690e # v1.3.1
         id: meta
         with:
           tag: ${{ steps.tag.outputs.tag }}
