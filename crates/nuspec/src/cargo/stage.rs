@@ -1,60 +1,7 @@
+use super::layout::{LayoutError, resolve};
 use crate::{File, Files, Package};
-use std::collections::HashMap;
-use std::path::{Component, Path, PathBuf};
-use std::{error, fmt, fs, io};
-
-/// An error staging a package.
-#[derive(Debug)]
-#[non_exhaustive]
-pub enum StageError {
-    /// Reading or copying a file failed.
-    Io {
-        /// The file or directory involved.
-        path: PathBuf,
-        /// The underlying error.
-        source: io::Error,
-    },
-    /// A `src` or `exclude` wildcard pattern is malformed.
-    Pattern {
-        /// The pattern.
-        pattern: String,
-        /// The parse error.
-        source: glob::PatternError,
-    },
-    /// A `src` wildcard pattern matched no files.
-    NoMatches(String),
-    /// Two different files would be staged at the same path in the package.
-    Conflict(String),
-    /// Writing the `.nuspec` failed.
-    Write(crate::Error),
-}
-
-impl fmt::Display for StageError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            StageError::Io { path, source } => write!(f, "{}: {source}", path.display()),
-            StageError::Pattern { pattern, source } => {
-                write!(f, "invalid pattern {pattern:?}: {source}")
-            }
-            StageError::NoMatches(pattern) => write!(f, "no files match {pattern:?}"),
-            StageError::Conflict(path) => {
-                write!(f, "more than one file would be packed as {path:?}")
-            }
-            StageError::Write(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl error::Error for StageError {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            StageError::Io { source, .. } => Some(source),
-            StageError::Pattern { source, .. } => Some(source),
-            StageError::Write(e) => Some(e),
-            _ => None,
-        }
-    }
-}
+use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 /// Copies every file of `package` into `dir`, laid out as in the final package, and writes
 /// `dir/<id>.nuspec` referring to them with relative paths.
@@ -67,39 +14,30 @@ impl error::Error for StageError {
 /// as its `src` file names the file itself rather than a folder. Existing files in `dir` are
 /// overwritten but not removed.
 ///
-/// Returns the staged package and the path of the written `.nuspec`.
-pub fn stage(package: &Package, dir: &Path) -> Result<(Package, PathBuf), StageError> {
+/// Relative `src` paths are resolved against the current directory. Returns the staged package
+/// and the path of the written `.nuspec`, which [`pack`](super::pack) accepts with `dir` as its
+/// base directory.
+pub fn stage(package: &Package, dir: &Path) -> Result<(Package, PathBuf), LayoutError> {
     let io_err = |path: &Path| {
         let path = path.to_path_buf();
-        move |source| StageError::Io { path, source }
+        move |source| LayoutError::Io { path, source }
     };
     fs::create_dir_all(dir).map_err(io_err(dir))?;
 
     let mut staged: Vec<File> = Vec::new();
-    let mut sources: HashMap<String, PathBuf> = HashMap::new();
-    for file in package.files.iter().flat_map(|f| f.file.iter()) {
-        let target = file.target.as_deref().unwrap_or_default();
-        for (source, dest) in expand(file, target)? {
-            let key = dest.to_lowercase();
-            match sources.get(&key) {
-                Some(existing) if *existing == source => continue,
-                Some(_) => return Err(StageError::Conflict(dest)),
-                None => {}
-            }
-            let to = dir.join(&dest);
-            if let Some(parent) = to.parent() {
-                fs::create_dir_all(parent).map_err(io_err(parent))?;
-            }
-            fs::copy(&source, &to).map_err(io_err(&source))?;
-            sources.insert(key, source);
-
-            let folder = dest.rsplit_once('/').map_or("", |(folder, _)| folder);
-            staged.push(File {
-                src: dest.clone(),
-                target: Some(folder.to_string()),
-                exclude: None,
-            });
+    for (source, dest) in resolve(package, Path::new(""))? {
+        let to = dir.join(&dest);
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent).map_err(io_err(parent))?;
         }
+        fs::copy(&source, &to).map_err(io_err(&source))?;
+
+        let folder = dest.rsplit_once('/').map_or("", |(folder, _)| folder);
+        staged.push(File {
+            src: dest.clone(),
+            target: Some(folder.to_string()),
+            exclude: None,
+        });
     }
 
     let package = Package {
@@ -110,90 +48,8 @@ pub fn stage(package: &Package, dir: &Path) -> Result<(Package, PathBuf), StageE
     let writer = fs::File::create(&nuspec).map_err(io_err(&nuspec))?;
     package
         .write_to(io::BufWriter::new(writer))
-        .map_err(StageError::Write)?;
+        .map_err(LayoutError::Write)?;
     Ok((package, nuspec))
-}
-
-/// Resolves a `<file>` into `(source path, path inside the package)` pairs.
-fn expand(file: &File, target: &str) -> Result<Vec<(PathBuf, String)>, StageError> {
-    let target = target.trim_matches(['/', '\\']).replace('\\', "/");
-    let src = Path::new(&file.src);
-
-    if !has_wildcard(&file.src) {
-        let name = src
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let target_ext = Path::new(&target).extension();
-        let dest = if !target.is_empty() && target_ext.is_some() && target_ext == src.extension() {
-            target
-        } else {
-            join(&target, &name)
-        };
-        return Ok(vec![(src.to_path_buf(), dest)]);
-    }
-
-    let excludes = file
-        .exclude
-        .iter()
-        .flatten()
-        .map(|p| {
-            glob::Pattern::new(p).map_err(|source| StageError::Pattern {
-                pattern: p.clone(),
-                source,
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let base: PathBuf = src
-        .components()
-        .take_while(|c| !matches!(c, Component::Normal(s) if has_wildcard(&s.to_string_lossy())))
-        .collect();
-    let matches = glob::glob(&file.src).map_err(|source| StageError::Pattern {
-        pattern: file.src.clone(),
-        source,
-    })?;
-
-    let mut result = Vec::new();
-    for entry in matches {
-        let path = entry.map_err(|e| StageError::Io {
-            path: e.path().to_path_buf(),
-            source: e.into(),
-        })?;
-        if !path.is_file() {
-            continue;
-        }
-        let relative = path
-            .strip_prefix(&base)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .replace('\\', "/");
-        let name = path.file_name().unwrap_or_default().to_string_lossy();
-        if excludes
-            .iter()
-            .any(|p| p.matches(&relative) || p.matches(&name))
-        {
-            continue;
-        }
-        result.push((path.clone(), join(&target, &relative)));
-    }
-    if result.is_empty() {
-        return Err(StageError::NoMatches(file.src.clone()));
-    }
-    result.sort();
-    Ok(result)
-}
-
-fn has_wildcard(s: &str) -> bool {
-    s.contains(['*', '?', '['])
-}
-
-fn join(folder: &str, name: &str) -> String {
-    if folder.is_empty() {
-        name.to_string()
-    } else {
-        format!("{folder}/{name}")
-    }
 }
 
 #[cfg(test)]
@@ -337,11 +193,11 @@ mod tests {
 
         let missing = tmp.0.join("missing.dll").to_string_lossy().into_owned();
         let err = stage(&package(vec![file(&missing, "lib")]), &out).unwrap_err();
-        assert!(matches!(err, StageError::Io { .. }), "{err}");
+        assert!(matches!(err, LayoutError::Io { .. }), "{err}");
 
         let pattern = tmp.0.join("nothing/*.dll").to_string_lossy().into_owned();
         let err = stage(&package(vec![file(&pattern, "lib")]), &out).unwrap_err();
-        assert!(matches!(err, StageError::NoMatches(_)), "{err}");
+        assert!(matches!(err, LayoutError::NoMatches(_)), "{err}");
 
         let a = tmp.write("a/x.dll", "a");
         let b = tmp.write("b/X.dll", "b");
