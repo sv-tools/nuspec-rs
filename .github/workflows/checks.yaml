@@ -13,6 +13,12 @@ on:
     outputs:
       publish:
         value: ${{ jobs.RustMeta.outputs.publish }}
+      # Set when called for a release tag (`<crate>/v<x.y.z>`), validated
+      # against the crate's Cargo.toml version; empty otherwise.
+      tag-package:
+        value: ${{ jobs.RustMeta.outputs.tag-package }}
+      tag-version:
+        value: ${{ jobs.RustMeta.outputs.tag-version }}
   schedule:
     - cron: "0 4 * * 1" # Mondays 04:00 UTC
 
@@ -29,59 +35,52 @@ jobs:
     name: Collect crate metadata
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.rustmeta.outputs.matrix }}
-      packages: ${{ steps.rustmeta.outputs.packages }}
+      matrix: ${{ steps.rustmeta.outputs.matrix-include }}
+      isolated-matrix: ${{ steps.isolated.outputs.matrix-include }}
       publish: ${{ steps.rustmeta.outputs.publish }}
+      release-order: ${{ steps.rustmeta.outputs.release-order }}
+      new-crates: ${{ steps.rustmeta.outputs.new-crates }}
+      tag-package: ${{ steps.rustmeta.outputs.tag-package }}
+      tag-version: ${{ steps.rustmeta.outputs.tag-version }}
       rust-version: ${{ steps.rustmeta.outputs.rust-version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: sv-tools/rust-metadata-action@56f5f4f6a41e50d5f5f440bd81c0ed041f9b8dfb # v1.2.3
+      # On a release tag (when called from `release-stage.yaml`), this also
+      # fails unless the tag names a publishable crate at its Cargo.toml version.
+      - uses: sv-tools/rust-metadata-action@911f68d27616d2824bcaadfac48ffa32d48055e5 # v1.3.0
         id: rustmeta
+      # Each feature on its own, and no features at all, for `IsolatedBuildJob`.
+      - uses: sv-tools/rust-metadata-action@911f68d27616d2824bcaadfac48ffa32d48055e5 # v1.3.0
+        id: isolated
+        with:
+          matrix-mode: isolated
   BuildJob:
-    name: Build per Package and Feature
+    name: Build ${{ matrix.args }}
     needs: RustMeta
     strategy:
       matrix:
-        args: ${{ fromJSON(needs.RustMeta.outputs.matrix) }}
+        include: ${{ fromJSON(needs.RustMeta.outputs.matrix) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
       - run: cargo build ${{ matrix.args }} --all-targets --verbose
   IsolatedBuildJob:
-    name: Build per Package with each Feature alone
+    name: Build ${{ matrix.args }}
     needs: RustMeta
     # Builds each feature on its own, and no features at all, with warnings
-    # denied, so code left behind a `cfg` (e.g. `nuspec` without `generate`)
-    # is not silently broken.
+    # denied, so code left behind a `cfg` (e.g. `nuspec` without `cargo`) is
+    # not silently broken.
     strategy:
       matrix:
-        package: ${{ fromJSON(needs.RustMeta.outputs.packages) }}
+        include: ${{ fromJSON(needs.RustMeta.outputs.isolated-matrix) }}
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
-      - name: Build with no features, then with each one alone
-        shell: bash
-        run: |
-          set -euo pipefail
-          package='${{ matrix.package }}'
-          echo "::group::${package} (no features)"
-          cargo build --package "$package" --no-default-features --all-targets --verbose
-          echo "::endgroup::"
-          features=$(cargo metadata --format-version 1 --no-deps \
-            | jq -r --arg p "$package" '.packages[]
-                | select(.name == $p)
-                | .features
-                | keys[]
-                | select(. != "default")')
-          for feature in $features; do
-            echo "::group::${package} --features=${feature}"
-            cargo build --package "$package" --no-default-features --features "$feature" --all-targets --verbose
-            echo "::endgroup::"
-          done
+      - run: cargo build ${{ matrix.args }} --all-targets --verbose
   MSRV:
     name: Check the minimum supported Rust version
     needs: RustMeta
@@ -128,11 +127,11 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
       - run: cargo doc --workspace --all-features --no-deps --verbose
   TestJob:
-    name: Test per Package and Feature
+    name: Test ${{ matrix.args }}
     needs: RustMeta
     strategy:
       matrix:
-        args: ${{ fromJSON(needs.RustMeta.outputs.matrix) }}
+        include: ${{ fromJSON(needs.RustMeta.outputs.matrix) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -141,23 +140,10 @@ jobs:
       - name: Run tests
         run: cargo llvm-cov nextest ${{ matrix.args }} --all-targets --no-fail-fast --no-tests=pass --verbose
       # nextest does not execute doctests, so run them with the standard
-      # test harness. Bin-only crates (`cargo-nuspec`) have no library target,
-      # and `cargo test --doc` bails with "no library targets found": treat
-      # that specific error as a skip and surface every other failure.
+      # test harness; only packages with a library target have any.
       - name: Run doctests
-        shell: bash
-        run: |
-          log=$(cargo test --doc ${{ matrix.args }} --no-fail-fast --verbose 2>&1) || rc=$?
-          rc=${rc:-0}
-          printf '%s\n' "$log"
-          if [[ $rc -eq 0 ]]; then
-            exit 0
-          fi
-          if grep -qF "no library targets found" <<< "$log"; then
-            echo "::notice::doctests skipped — package has no library target"
-            exit 0
-          fi
-          exit $rc
+        if: ${{ matrix.lib }}
+        run: cargo test --doc ${{ matrix.args }} --no-fail-fast --verbose
       - name: Prepare coverage report
         if: ${{ !cancelled() }}
         run: cargo llvm-cov report --lcov --output-path coverage.lcov
@@ -257,7 +243,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
       # All bumped crates go into one cargo invocation so cargo stages
-      # siblings in a local registry and orders them by dependency.
+      # siblings in a local registry; `publish` is already in dependency order.
       - name: Build the package flag list
         id: packages
         env:
@@ -268,22 +254,27 @@ jobs:
           echo "flags=$flags" >> "$GITHUB_OUTPUT"
           echo "batch: $flags"
       - name: Dry run publish
-        run: |
-          set -euo pipefail
-          cargo publish --all-features ${{ steps.packages.outputs.flags }} \
-            --dry-run --verbose 2>&1 | tee "$RUNNER_TEMP/publish-dry-run.log"
+        run: cargo publish --all-features ${{ steps.packages.outputs.flags }} --dry-run --verbose
       - name: Report the release order
+        env:
+          RELEASE_ORDER: ${{ needs.RustMeta.outputs.release-order }}
+          NEW_CRATES: ${{ needs.RustMeta.outputs.new-crates }}
         run: |
           set -euo pipefail
           {
             echo "### Release order"
             echo
-            echo "One crate per tag, resolved from crates.io — push in this order:"
+            echo "One crate per tag; publish each release before pushing the next tag:"
             echo
             echo '```sh'
-            sed -n 's|^ *Uploading \([^ ]*\) v\([^ ]*\) .*|git push origin \1/v\2|p' \
-              "$RUNNER_TEMP/publish-dry-run.log"
+            jq -r '.[] | "git tag \(.) && git push origin \(.)"' <<<"$RELEASE_ORDER"
             echo '```'
+            if [[ "$NEW_CRATES" != "[]" ]]; then
+              echo
+              echo "Not on crates.io yet, so trusted publishing can't create them; publish by hand first:"
+              echo
+              jq -r '.[] | "- `\(.)`"' <<<"$NEW_CRATES"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Create packages
         run: cargo package --all-features ${{ steps.packages.outputs.flags }} --verbose

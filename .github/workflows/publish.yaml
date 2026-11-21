@@ -23,24 +23,23 @@ jobs:
   Resolve:
     runs-on: ubuntu-latest
     outputs:
-      tag: ${{ steps.parse.outputs.tag }}
-      package: ${{ steps.parse.outputs.package }}
-      version: ${{ steps.parse.outputs.version }}
+      tag: ${{ steps.tag.outputs.tag }}
+      package: ${{ steps.meta.outputs.tag-package }}
+      version: ${{ steps.meta.outputs.tag-version }}
     steps:
-      - id: parse
+      - id: tag
         env:
           TAG: ${{ github.event.release.tag_name || inputs.tag }}
-        run: |
-          set -euo pipefail
-          if [[ "$TAG" != */v* ]]; then
-            echo "::error::tag '$TAG' must be in the form <package>/v<version>"
-            exit 1
-          fi
-          {
-            echo "tag=$TAG"
-            echo "package=${TAG%/v*}"
-            echo "version=${TAG##*/v}"
-          } >> "$GITHUB_OUTPUT"
+        run: echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+      # Fails unless the tag is `<crate>/v<x.y.z>` for a publishable crate at
+      # that Cargo.toml version.
+      - uses: sv-tools/rust-metadata-action@911f68d27616d2824bcaadfac48ffa32d48055e5 # v1.3.0
+        id: meta
+        with:
+          tag: ${{ steps.tag.outputs.tag }}
 
   Publish:
     needs: Resolve
