@@ -36,6 +36,9 @@
 //! title = "Contoso Engine CLI"
 //! ```
 //!
+//! By default the generated `.nuspec` refers to the files where Cargo left them. Set
+//! `stage = true` in `[package.metadata.nuspec]` to [`stage`] them instead.
+//!
 //! The `metadata` tables accept any [`Metadata`] field, as `camelCase` (as in the nuspec) or
 //! `snake_case`. Values set there win over the ones derived from Cargo.
 
@@ -45,10 +48,23 @@ use cargo_metadata::{Artifact, CrateType, TargetKind};
 use serde::Deserialize;
 use std::{error, fmt};
 
+mod stage;
+pub use stage::{StageError, stage};
+
 /// The `[package.metadata.nuspec]` table.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Config {
+    /// Whether to [`stage`] the packages: copy every file into a self-contained directory
+    /// next to the `.nuspec`, with relative paths, so it can be moved to another machine
+    /// (for example, to sign the binaries in a separate CI job before packing).
+    /// When `false` or unset, the `.nuspec` refers to the files where they are.
+    #[serde(default)]
+    pub stage: Option<bool>,
+    /// Where to write the `.nuspec` files (and staged directories), relative to the workspace
+    /// root. Defaults to `nuspec` in Cargo's target directory.
+    #[serde(default)]
+    pub out_dir: Option<String>,
     /// Metadata applied to every package, overriding values derived from Cargo.
     #[serde(default)]
     pub metadata: Option<Metadata>,
@@ -776,6 +792,17 @@ mod tests {
                 pair("/abs/run.ps1", "scripts"),
             ]
         );
+    }
+
+    #[test]
+    fn test_config_stage_options() {
+        let (mut pkg, _) = lib_and_bin();
+        assert_eq!(Config::from_package(&pkg).unwrap(), Config::default());
+
+        pkg.metadata = json!({ "nuspec": { "stage": true, "out-dir": "dist/nuget" } });
+        let config = Config::from_package(&pkg).unwrap();
+        assert_eq!(config.stage, Some(true));
+        assert_eq!(config.out_dir.as_deref(), Some("dist/nuget"));
     }
 
     #[test]

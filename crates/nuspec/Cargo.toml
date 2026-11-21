@@ -19,10 +19,11 @@ default = ["generate"]
 # if you want to use the library without generating Nuspec files.
 generate = ["dep:toml"]
 # Builds `Package`s from `cargo metadata` and `cargo build --message-format=json` output.
-cargo = ["dep:cargo_metadata", "dep:serde_json"]
+cargo = ["dep:cargo_metadata", "dep:glob", "dep:serde_json"]
 
 [dependencies]
 cargo_metadata = { workspace = true, optional = true }
+glob = { workspace = true, optional = true }
 quick-xml.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, optional = true }
