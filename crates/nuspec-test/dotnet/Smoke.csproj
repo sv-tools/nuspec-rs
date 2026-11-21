@@ -1,0 +1,13 @@
+<!-- Consumes the native package built by `cargo nuspec` and calls into the Rust cdylib.
+     Run by the `NuGetJob` CI job; pass -p:NuspecTestVersion=<version> to restore and run. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="nuspec-test" Version="$(NuspecTestVersion)" />
+  </ItemGroup>
+</Project>

@@ -44,7 +44,7 @@
 //! `snake_case`. Values set there win over the ones derived from Cargo.
 
 use crate::{File, Files, License, Metadata, Package, Repository, ValidationErrors};
-use cargo_metadata::camino::{Utf8Path, Utf8PathBuf};
+use cargo_metadata::camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use cargo_metadata::{Artifact, CrateType, TargetKind};
 use serde::Deserialize;
 use std::{error, fmt};
@@ -371,7 +371,7 @@ fn build_package(
         let src = if src.is_absolute() {
             src.to_path_buf()
         } else {
-            manifest_dir.join(src)
+            normalize(&manifest_dir.join(src))
         };
         files.push(File {
             src: src.into_string(),
@@ -417,7 +417,7 @@ fn from_cargo(package: &cargo_metadata::Package, files: &mut Vec<File>) -> Metad
         && let Some(name) = path.file_name()
     {
         metadata.license = Some(License::File(name.to_string()));
-        push_file(files, &path, "");
+        push_file(files, &normalize(&path), "");
     }
 
     // NuGet only renders Markdown readmes.
@@ -428,7 +428,7 @@ fn from_cargo(package: &cargo_metadata::Package, files: &mut Vec<File>) -> Metad
         && let Some(name) = path.file_name()
     {
         metadata.readme = Some(name.to_string());
-        push_file(files, &path, "");
+        push_file(files, &normalize(&path), "");
     }
     metadata
 }
@@ -511,6 +511,24 @@ fn fill(target: &mut Metadata, from: Metadata) {
     option(&mut target.framework_references, framework_references);
     option(&mut target.references, references);
     option(&mut target.content_files, content_files);
+}
+
+/// Removes `.` and `..` components without touching the file system, so paths such as
+/// `crate/../../README.md` (from workspace-inherited fields) read naturally.
+fn normalize(path: &Utf8Path) -> Utf8PathBuf {
+    let mut out = Utf8PathBuf::new();
+    for component in path.components() {
+        match component {
+            Utf8Component::CurDir => {}
+            Utf8Component::ParentDir
+                if matches!(out.components().next_back(), Some(Utf8Component::Normal(_))) =>
+            {
+                out.pop();
+            }
+            other => out.push(other.as_str()),
+        }
+    }
+    out
 }
 
 fn push_file(files: &mut Vec<File>, src: &Utf8Path, target: &str) {
@@ -878,6 +896,14 @@ mod tests {
             packages(&pkg, &artifacts, "win-x64"),
             Err(Error::MissingArtifact { .. })
         ));
+    }
+
+    #[test]
+    fn test_normalize() {
+        assert_eq!(normalize("/w/crate/../../README.md".into()), "/README.md");
+        assert_eq!(normalize("/w/./a/../b".into()), "/w/b");
+        assert_eq!(normalize("../a/./b".into()), "../a/b");
+        assert_eq!(normalize("/w/deploy/**/*.ps1".into()), "/w/deploy/**/*.ps1");
     }
 
     #[test]

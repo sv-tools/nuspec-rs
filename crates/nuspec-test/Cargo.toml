@@ -24,18 +24,16 @@ path = "src/bin2.rs"
 name = "nuspec_test_lib"
 crate-type = ["cdylib", "rlib", "staticlib"]
 
-[build-dependencies]
-nuspec.workspace = true
+# Packaged by `cargo nuspec`: the cdylib becomes a native package and the binaries an app
+# package, with the license files added to both.
+[package.metadata.nuspec]
+files = [
+  { src = "../../LICENSE-MIT", target = "" },
+  { src = "../../LICENSE-APACHE", target = "" },
+]
 
-# All fields must be in the camelCase format (same as in the xml file)
-[package.metadata.nuspec.package.metadata]
+[package.metadata.nuspec.metadata]
 requireLicenseAcceptance = false
-
-[[package.metadata.nuspec.package.files.file]]
-src = "../../LICENSE-MIT"
-
-[[package.metadata.nuspec.package.files.file]]
-src = "../../LICENSE-APACHE"
 
 [lints]
 workspace = true
