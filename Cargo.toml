@@ -11,14 +11,14 @@ readme = "README.md"
 repository = "https://github.com/sv-tools/nuspec-rs"
 keywords = ["nuspec", "nuget", "nupkg", "dotnet"]
 categories = ["development-tools::build-utils"]
-version = "0.3.0"
+version = "0.3.1"
 
 [workspace.dependencies]
 anyhow = "1.0.104"
 cargo_metadata = "0.23.1"
 clap = { version = "4.6.9", features = ["derive"] }
 glob = "0.3.4"
-nuspec = { path = "crates/nuspec", version = "0.3.0" }
+nuspec = { path = "crates/nuspec", version = "0.3.1" }
 quick-xml = { version = "0.42.0", features = ["serialize"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

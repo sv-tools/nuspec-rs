@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "cargo-nuspec"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "cargo_metadata",
@@ -294,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "nuspec"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cargo_metadata",
  "glob",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "nuspec-test"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "once_cell_polyfill"
