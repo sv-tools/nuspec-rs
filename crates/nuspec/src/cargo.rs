@@ -40,6 +40,10 @@
 //! `stage = true` in `[package.metadata.nuspec]` to [`stage`] them instead.
 //! Either way, [`pack`] writes the `.nupkg` directly, without `nuget` or `dotnet`.
 //!
+//! Native packages are built one platform at a time. To ship one package for every platform,
+//! [`merge`] the packages built on each (staged, or read back from a `.nupkg` with [`unpack`]):
+//! their `runtimes/<rid>/native/` folders are combined into one package.
+//!
 //! The `metadata` tables accept any [`Metadata`] field, as `camelCase` (as in the nuspec) or
 //! `snake_case`. Values set there win over the ones derived from Cargo.
 
@@ -50,9 +54,11 @@ use serde::Deserialize;
 use std::{error, fmt};
 
 mod layout;
+mod merge;
 mod pack;
 mod stage;
 pub use layout::LayoutError;
+pub use merge::{merge, unpack};
 pub use pack::pack;
 pub use stage::stage;
 
@@ -190,15 +196,9 @@ impl fmt::Display for Error {
     }
 }
 
-impl error::Error for Error {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            Error::Config { source, .. } => Some(source),
-            Error::Invalid { errors, .. } => Some(errors),
-            _ => None,
-        }
-    }
-}
+// The messages include the underlying errors, so they are not also reported as sources:
+// error reporters that print the chain would show them twice.
+impl error::Error for Error {}
 
 impl Config {
     /// Reads `[package.metadata.nuspec]`; a missing table is the default configuration.

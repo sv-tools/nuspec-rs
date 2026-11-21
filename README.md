@@ -59,6 +59,23 @@ layout = "root"                     # binaries in the package root instead of to
 files = [{ src = "deploy/*.ps1", target = "scripts" }]
 ```
 
+### One package for every platform
+
+Native packages are built on each platform. `cargo nuspec merge` combines them into one
+package with the library of every platform in its `runtimes/<rid>/native/`:
+
+```sh
+# On each platform, e.g. in a CI matrix
+cargo nuspec --release --stage --pack --out-dir dist
+
+# Then, with the packages of every platform collected in one place
+cargo nuspec merge --pack --out-dir merged linux/MyLib.1.0.0.nupkg win/MyLib.1.0.0.nupkg osx/MyLib.1.0.0.nupkg
+```
+
+The inputs can be `.nupkg` files, `.nuspec` files or staged directories. The packages must have
+the same id, version and metadata, and files they share, such as the readme, must be identical.
+The merged package is staged in `merged/<id>/`, so its files can be signed before packing it.
+
 ### Verifying the binaries
 
 The archives on the [releases page](https://github.com/sv-tools/nuspec-rs/releases) come with
