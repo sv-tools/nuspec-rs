@@ -1,4 +1,4 @@
-use super::layout::{LayoutError, resolve};
+use super::layout::{LayoutError, is_safe_file_name, resolve};
 use crate::{File, Files, Package};
 use std::path::{Path, PathBuf};
 use std::{fs, io};
@@ -19,14 +19,18 @@ use std::{fs, io};
 /// and the path of the written `.nuspec`, which [`pack`](super::pack) accepts with `dir` as its
 /// base directory.
 pub fn stage(package: &Package, dir: &Path) -> Result<(Package, PathBuf), LayoutError> {
+    if !is_safe_file_name(&package.metadata.id) {
+        return Err(LayoutError::UnsafePath(package.metadata.id.clone()));
+    }
     let io_err = |path: &Path| {
         let path = path.to_path_buf();
         move |source| LayoutError::Io { path, source }
     };
+    let entries = resolve(package, Path::new(""))?;
     fs::create_dir_all(dir).map_err(io_err(dir))?;
 
     let mut staged: Vec<File> = Vec::new();
-    for (source, dest) in resolve(package, Path::new(""))? {
+    for (source, dest) in entries {
         let to = dir.join(&dest);
         if let Some(parent) = to.parent() {
             fs::create_dir_all(parent).map_err(io_err(parent))?;
@@ -218,5 +222,21 @@ mod tests {
             err.to_string(),
             "more than one file would be packed as \"lib/X.dll\""
         );
+
+        let err = stage(&package(vec![file(&a, "../escape.dll")]), &out).unwrap_err();
+        assert!(
+            matches!(err, LayoutError::UnsafePath(ref p) if p == "../escape.dll"),
+            "{err}"
+        );
+        assert!(!tmp.0.join("escape.dll").exists());
+
+        let mut evil = package(vec![]);
+        evil.metadata.id = "../escape".to_string();
+        let err = stage(&evil, &out).unwrap_err();
+        assert!(
+            matches!(err, LayoutError::UnsafePath(ref p) if p == "../escape"),
+            "{err}"
+        );
+        assert!(!tmp.0.join("escape.nuspec").exists());
     }
 }

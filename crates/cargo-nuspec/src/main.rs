@@ -4,7 +4,9 @@
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::camino::Utf8Path;
-use cargo_metadata::{Artifact, Message, Metadata, MetadataCommand, Package};
+use cargo_metadata::{
+    Artifact, Message, Metadata, MetadataCommand, Package, PackageId, TargetKind,
+};
 use clap::{Args, Parser, Subcommand};
 use nuspec::cargo::{Config, merge, pack, packages, rid_for_target, stage, unpack};
 use std::ffi::OsString;
@@ -173,10 +175,13 @@ fn run(args: &NuspecArgs) -> Result<()> {
         None => {
             let triple = match &args.target {
                 Some(target) => target.clone(),
-                None => match infer_target(&artifacts, &metadata.target_directory) {
-                    Some(target) => target,
-                    None => host_target()?,
-                },
+                None => {
+                    let selected_ids: Vec<&PackageId> = selected.iter().map(|p| &p.id).collect();
+                    match infer_target(&artifacts, &selected_ids, &metadata.target_directory) {
+                        Some(target) => target,
+                        None => host_target()?,
+                    }
+                }
             };
             rid_for_target(&triple).with_context(|| {
                 format!("no .NET runtime identifier is known for {triple}; pass --rid")
@@ -421,14 +426,27 @@ fn build_args(args: &NuspecArgs, packages: &[&Package]) -> Vec<String> {
 /// Cargo puts the final artifacts in `<target-dir>/<profile>/` for the host and in
 /// `<target-dir>/<triple>/<profile>/` for an explicit target, including one set in
 /// `.cargo/config.toml` or passed after `--`.
-fn infer_target(artifacts: &[Artifact], target_dir: &Utf8Path) -> Option<String> {
+///
+/// Only non-host targets of the selected packages are inspected, and intermediate directories
+/// such as `<target-dir>/<profile>/deps/` are ignored.
+fn infer_target(
+    artifacts: &[Artifact],
+    selected: &[&PackageId],
+    target_dir: &Utf8Path,
+) -> Option<String> {
     artifacts
         .iter()
+        .filter(|a| {
+            selected.contains(&&a.package_id)
+                && !a.target.kind.contains(&TargetKind::CustomBuild)
+                && !a.target.kind.contains(&TargetKind::ProcMacro)
+        })
         .flat_map(|a| a.filenames.iter())
         .find_map(|file| {
             let relative = file.strip_prefix(target_dir).ok()?;
             let parts: Vec<&str> = relative.iter().collect();
-            (parts.len() == 3).then(|| parts[0].to_string())
+            (parts.len() == 3 && !matches!(parts[1], "deps" | "build" | "examples" | "incremental"))
+                .then(|| parts[0].to_string())
         })
 }
 
@@ -640,12 +658,18 @@ mod tests {
 
     #[test]
     fn test_infer_target() {
-        let artifact = |file: &str| -> Artifact {
+        let pkg_id = PackageId {
+            repr: "path+file:///w#x@0.1.0".to_string(),
+        };
+        let dep_id = PackageId {
+            repr: "registry+https://github.com/rust-lang/crates.io-index#dep@1.0.0".to_string(),
+        };
+        let artifact = |id: &PackageId, kind: &str, files: &[&str]| -> Artifact {
             serde_json::from_value(serde_json::json!({
-                "package_id": "path+file:///w#x@0.1.0",
+                "package_id": id.repr,
                 "manifest_path": "/w/Cargo.toml",
                 "target": {
-                    "name": "x", "kind": ["bin"], "crate_types": ["bin"],
+                    "name": "x", "kind": [kind], "crate_types": [kind],
                     "src_path": "/w/src/main.rs", "edition": "2024",
                 },
                 "profile": {
@@ -653,21 +677,59 @@ mod tests {
                     "overflow_checks": true, "test": false,
                 },
                 "features": [],
-                "filenames": [file],
-                "executable": file,
+                "filenames": files,
+                "executable": (kind == "bin").then(|| files[0]),
                 "fresh": true,
             }))
             .unwrap()
         };
         let target_dir = Utf8Path::new("/w/target");
-        assert_eq!(
-            infer_target(&[artifact("/w/target/debug/x")], target_dir),
-            None
-        );
+        let selected = [&pkg_id];
         assert_eq!(
             infer_target(
-                &[artifact("/w/target/aarch64-apple-darwin/release/x")],
+                &[artifact(&pkg_id, "bin", &["/w/target/debug/x"])],
+                &selected,
                 target_dir
+            ),
+            None
+        );
+        // Intermediate directories (deps, examples) and dependencies are ignored.
+        assert_eq!(
+            infer_target(
+                &[
+                    artifact(&dep_id, "lib", &["/w/target/debug/deps/libdep-123.rlib"]),
+                    artifact(
+                        &pkg_id,
+                        "cdylib",
+                        &[
+                            "/w/target/debug/deps/libx-123.rlib",
+                            "/w/target/debug/libx.so",
+                        ],
+                    ),
+                    artifact(&pkg_id, "example", &["/w/target/debug/examples/ex"]),
+                ],
+                &selected,
+                target_dir,
+            ),
+            None
+        );
+        // Host-only custom-build / proc-macro artifacts do not hide or spoof the target.
+        assert_eq!(
+            infer_target(
+                &[
+                    artifact(
+                        &pkg_id,
+                        "custom-build",
+                        &["/w/target/host-triple/release/build-script-build"],
+                    ),
+                    artifact(
+                        &pkg_id,
+                        "bin",
+                        &["/w/target/aarch64-apple-darwin/release/x"],
+                    ),
+                ],
+                &selected,
+                target_dir,
             ),
             Some("aarch64-apple-darwin".to_string())
         );

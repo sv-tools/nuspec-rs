@@ -1,5 +1,5 @@
-use super::layout::{LayoutError, resolve};
-use crate::{File, Files, Package};
+use super::layout::{LayoutError, is_safe, is_safe_file_name, resolve};
+use crate::{File, Files, Metadata, Package};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read};
@@ -59,7 +59,14 @@ fn check_same(first: &Package, other: &Package) -> Result<(), LayoutError> {
             a.id, a.version, b.id, b.version
         )));
     }
-    if a != b {
+    if a != b
+        && (a.id == b.id
+            || *a
+                != Metadata {
+                    id: a.id.clone(),
+                    ..b.clone()
+                })
+    {
         return Err(LayoutError::Mismatch(format!(
             "cannot merge the {} {} packages: their metadata differs",
             a.id, a.version
@@ -155,6 +162,9 @@ pub fn unpack(nupkg: &Path, dir: &Path) -> Result<(Package, PathBuf), LayoutErro
 
     let package = nuspec
         .ok_or_else(|| LayoutError::Mismatch(format!("{} has no .nuspec", nupkg.display())))?;
+    if !is_safe_file_name(&package.metadata.id) {
+        return Err(LayoutError::UnsafePath(package.metadata.id));
+    }
     let package = Package {
         files: Some(Files { file: files }),
         ..package
@@ -185,15 +195,6 @@ fn unescape_part(name: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
-}
-
-/// A path inside a package that stays inside the extraction directory.
-fn is_safe(name: &str) -> bool {
-    !name.is_empty()
-        && !name.contains(['\\', ':', '\0'])
-        && name
-            .split('/')
-            .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
 #[cfg(test)]
@@ -385,6 +386,12 @@ mod tests {
             .to_string();
         assert!(err.contains("same id and version"), "{err}");
 
+        // Case-insensitive package id match succeeds and keeps the first id's casing.
+        let (mut win, win_dir) = platform(&tmp, "win-x64", "demo.dll");
+        win.metadata.id = "demo.native".to_string();
+        let merged = merge(&[(linux.clone(), linux_dir.clone()), (win, win_dir)]).unwrap();
+        assert_eq!(merged.metadata.id, "Demo.Native");
+
         // Other metadata differs.
         let mut described = linux.clone();
         described.metadata.description = "Other".to_string();
@@ -414,6 +421,22 @@ mod tests {
             "{result:?}"
         );
         assert!(!tmp.0.join("escape.txt").exists());
+
+        // A malicious <id> inside the .nuspec cannot write <id>.nuspec outside the target dir.
+        let id_path = tmp.0.join("evil-id.nupkg");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&id_path).unwrap());
+        let mut evil_pkg = package(vec![]);
+        evil_pkg.metadata.id = "../escape".to_string();
+        zip.start_file("evil.nuspec", options).unwrap();
+        io::Write::write_all(&mut zip, evil_pkg.to_xml().unwrap().as_bytes()).unwrap();
+        zip.finish().unwrap();
+
+        let result = unpack(&id_path, &tmp.0.join("out-id"));
+        assert!(
+            matches!(&result, Err(LayoutError::UnsafePath(name)) if name == "../escape"),
+            "{result:?}"
+        );
+        assert!(!tmp.0.join("escape.nuspec").exists());
     }
 
     #[test]
@@ -427,6 +450,10 @@ mod tests {
         assert!(is_safe("runtimes/linux-x64/native/libdemo.so"));
         for name in ["", "/abs", "a//b", "../x", "a/./b", "c:/x", "a\\b"] {
             assert!(!is_safe(name), "{name}");
+        }
+        assert!(is_safe_file_name("Demo.Native"));
+        for name in ["", ".", "..", "a/b", "../x", "a\\b"] {
+            assert!(!is_safe_file_name(name), "{name}");
         }
     }
 }

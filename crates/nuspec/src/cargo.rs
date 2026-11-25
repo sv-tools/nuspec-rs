@@ -238,7 +238,10 @@ pub fn packages(
     let mut result: Vec<Package> = Vec::with_capacity(configs.len());
     for pkg_config in &configs {
         let pkg = build_package(package, &config, pkg_config, &artifacts, rid)?;
-        if result.iter().any(|p| p.metadata.id == pkg.metadata.id) {
+        if result
+            .iter()
+            .any(|p| p.metadata.id.eq_ignore_ascii_case(&pkg.metadata.id))
+        {
             return Err(Error::DuplicateId(pkg.metadata.id));
         }
         pkg.validate().map_err(|errors| Error::Invalid {
@@ -296,7 +299,13 @@ fn build_package(
         fill(&mut metadata, shared.clone());
     }
     let mut files = Vec::new();
-    fill(&mut metadata, from_cargo(package, &mut files));
+    let cargo_meta = from_cargo(
+        package,
+        metadata.license.is_none(),
+        metadata.readme.is_none(),
+        &mut files,
+    );
+    fill(&mut metadata, cargo_meta);
 
     if let Some(id) = &pkg_config.id {
         metadata.id = id.clone();
@@ -398,7 +407,12 @@ fn build_package(
 }
 
 /// The metadata Cargo knows about, plus the readme and license files it refers to.
-fn from_cargo(package: &cargo_metadata::Package, files: &mut Vec<File>) -> Metadata {
+fn from_cargo(
+    package: &cargo_metadata::Package,
+    include_license: bool,
+    include_readme: bool,
+    files: &mut Vec<File>,
+) -> Metadata {
     let mut metadata = Metadata {
         id: package.name.to_string(),
         version: package.version.to_string(),
@@ -422,17 +436,20 @@ fn from_cargo(package: &cargo_metadata::Package, files: &mut Vec<File>) -> Metad
         metadata.authors = vec![package.name.to_string()];
     }
 
-    if let Some(license) = non_empty(&package.license) {
-        metadata.license = Some(License::Expression(license));
-    } else if let Some(path) = package.license_file()
-        && let Some(name) = path.file_name()
-    {
-        metadata.license = Some(License::File(name.to_string()));
-        push_file(files, &normalize(&path), "");
+    if include_license {
+        if let Some(license) = non_empty(&package.license) {
+            metadata.license = Some(License::Expression(license));
+        } else if let Some(path) = package.license_file()
+            && let Some(name) = path.file_name()
+        {
+            metadata.license = Some(License::File(name.to_string()));
+            push_file(files, &normalize(&path), "");
+        }
     }
 
     // NuGet only renders Markdown readmes.
-    if let Some(path) = package.readme()
+    if include_readme
+        && let Some(path) = package.readme()
         && path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("md"))
@@ -897,22 +914,63 @@ mod tests {
 
         let (mut pkg, artifacts) = lib_and_bin();
         pkg.metadata = json!({ "nuspec": { "packages": [
-            { "kind": "app", "id": "x", "id-suffix-rid": false },
-            { "kind": "native", "id": "x" },
+            { "kind": "app", "id": "Demo", "id-suffix-rid": false },
+            { "kind": "native", "id": "demo" },
         ]}});
         assert!(matches!(
             packages(&pkg, &artifacts, "win-x64"),
-            Err(Error::DuplicateId(id)) if id == "x"
+            Err(Error::DuplicateId(id)) if id == "demo"
         ));
 
         pkg.metadata = json!({ "nuspec": { "package": {} } });
         let err = packages(&pkg, &artifacts, "win-x64").unwrap_err();
         assert!(err.to_string().contains("unknown field `package`"), "{err}");
 
+        pkg.metadata = json!({ "nuspec": { "metadata": { "tags": 123 } } });
+        let err = packages(&pkg, &artifacts, "win-x64").unwrap_err();
+        assert!(matches!(err, Error::Config { .. }), "{err}");
+
         pkg.metadata = json!(null);
         pkg.description = None;
         let err = packages(&pkg, &artifacts, "win-x64").unwrap_err();
         assert!(matches!(err, Error::Invalid { .. }), "{err}");
+    }
+
+    #[test]
+    fn test_metadata_overrides_skip_cargo_files_and_accept_arrays() {
+        let mut pkg = package(vec![target("demo", "cdylib", &["cdylib"])], json!(null));
+        pkg.license = None;
+        pkg.license_file = Some("LICENSE.txt".into());
+        pkg.readme = Some("README.md".into());
+        pkg.metadata = json!({
+            "nuspec": {
+                "metadata": {
+                    "readme": "README.md",
+                    "license": { "@type": "expression", "$text": "MIT" },
+                    "authors": ["Alice", "Bob"],
+                    "owners": ["Contoso"],
+                    "tags": ["ffi", "native"],
+                },
+                "files": [
+                    { "src": "nuget/README.md", "target": "", "exclude": ["*.bak"] },
+                ],
+            }
+        });
+        let artifacts = [artifact("demo", "cdylib", &["cdylib"], &["/t/libdemo.so"])];
+        let result = packages(&pkg, &artifacts, "linux-x64").unwrap();
+        let m = &result[0].metadata;
+        assert_eq!(m.authors, vec!["Alice", "Bob"]);
+        assert_eq!(m.owners, Some(vec!["Contoso".to_string()]));
+        assert_eq!(m.tags, Some(vec!["ffi".to_string(), "native".to_string()]));
+        assert_eq!(m.license, Some(License::Expression("MIT".to_string())));
+        assert_eq!(m.readme.as_deref(), Some("README.md"));
+        assert_eq!(
+            files(&result[0]),
+            vec![
+                pair("/t/libdemo.so", "runtimes/linux-x64/native/libdemo.so"),
+                pair("/work/demo/nuget/README.md", "README.md"),
+            ]
+        );
     }
 
     #[test]

@@ -433,7 +433,7 @@ pub struct PackageTypes {
 #[serde(deny_unknown_fields)]
 pub struct PackageType {
     /// The type of the package, such as "Dependency", "DotnetTool", etc.
-    #[serde(rename = "@name", with = "know_package_type", alias = "name")]
+    #[serde(rename = "@name", with = "known_package_type", alias = "name")]
     pub name: KnownPackageType,
     /// The version of the package type.
     #[serde(
@@ -659,7 +659,11 @@ pub struct ContentFile {
     /// The build action to assign to the content item for MSBuild, such as Content, None,
     /// Embedded Resource, Compile, etc.
     /// The default is Compile.
-    #[serde(rename = "@buildAction", alias = "build_action")]
+    #[serde(
+        rename = "@buildAction",
+        skip_serializing_if = "Option::is_none",
+        alias = "build_action"
+    )]
     pub build_action: Option<BuildAction>,
 
     /// A Boolean indicating whether to copy content items to the build (or publish) output folder.
@@ -731,7 +735,7 @@ pub struct File {
     pub exclude: Option<Vec<String>>,
 }
 
-mod know_package_type {
+mod known_package_type {
     use super::KnownPackageType;
     use serde::{Deserialize, Deserializer, Serializer};
 
@@ -757,8 +761,98 @@ mod know_package_type {
     }
 }
 
+fn deserialize_delimited<'de, D>(deserializer: D, delimiter: char) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct DelimitedVisitor(char);
+
+    impl<'de> serde::de::Visitor<'de> for DelimitedVisitor {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string or a sequence of strings")
+        }
+
+        fn visit_str<E>(self, s: &str) -> Result<Self::Value, E> {
+            Ok(if self.0 == ' ' {
+                s.split_whitespace().map(str::to_string).collect()
+            } else if s.is_empty() {
+                vec![]
+            } else {
+                s.split(self.0).map(|s| s.trim().to_string()).collect()
+            })
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut items = Vec::new();
+            while let Some(item) = seq.next_element::<String>()? {
+                items.push(item);
+            }
+            Ok(items)
+        }
+
+        // `quick-xml` deserializes XML elements as maps with `$text` when `deserialize_any` is used.
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            let mut text = String::new();
+            while let Some(key) = map.next_key::<String>()? {
+                if key == "$text" {
+                    text.push_str(&map.next_value::<String>()?);
+                } else {
+                    return Err(serde::de::Error::unknown_field(&key, &["$text"]));
+                }
+            }
+            self.visit_str(&text)
+        }
+    }
+
+    deserializer.deserialize_any(DelimitedVisitor(delimiter))
+}
+
+fn deserialize_optional_delimited<'de, D>(
+    deserializer: D,
+    delimiter: char,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct OptionalDelimitedVisitor(char);
+
+    impl<'de> serde::de::Visitor<'de> for OptionalDelimitedVisitor {
+        type Value = Option<Vec<String>>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string, a sequence of strings, or null")
+        }
+
+        fn visit_none<E>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+        where
+            D: serde::Deserializer<'de>,
+        {
+            deserialize_delimited(deserializer, self.0).map(Some)
+        }
+    }
+
+    deserializer.deserialize_option(OptionalDelimitedVisitor(delimiter))
+}
+
 mod comma_separated {
-    use serde::{Deserialize, Deserializer, Serializer};
+    use super::deserialize_delimited;
+    use serde::{Deserializer, Serializer};
 
     pub fn serialize<S>(value: &[String], serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -771,17 +865,12 @@ mod comma_separated {
     where
         D: Deserializer<'de>,
     {
-        let s: String = Deserialize::deserialize(deserializer)?;
-        Ok(if s.is_empty() {
-            vec![]
-        } else {
-            s.split(',').map(|s| s.trim().to_string()).collect()
-        })
+        deserialize_delimited(deserializer, ',')
     }
 }
 
 mod optional_comma_separated {
-    use super::comma_separated;
+    use super::{comma_separated, deserialize_optional_delimited};
     use serde::{Deserializer, Serializer};
 
     pub fn serialize<S>(value: &Option<Vec<String>>, serializer: S) -> Result<S::Ok, S::Error>
@@ -799,38 +888,12 @@ mod optional_comma_separated {
     where
         D: Deserializer<'de>,
     {
-        match comma_separated::deserialize(deserializer) {
-            Ok(v) => Ok(Some(v)),
-            Err(_) => Ok(None),
-        }
-    }
-}
-
-mod space_separated {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(value: &[String], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&value.join(" "))
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s: String = Deserialize::deserialize(deserializer)?;
-        Ok(if s.is_empty() {
-            vec![]
-        } else {
-            s.split(' ').map(|s| s.trim().to_string()).collect()
-        })
+        deserialize_optional_delimited(deserializer, ',')
     }
 }
 
 mod optional_space_separated {
-    use super::space_separated;
+    use super::deserialize_optional_delimited;
     use serde::{Deserializer, Serializer};
 
     pub fn serialize<S>(value: &Option<Vec<String>>, serializer: S) -> Result<S::Ok, S::Error>
@@ -838,7 +901,7 @@ mod optional_space_separated {
         S: Serializer,
     {
         if let Some(v) = value {
-            space_separated::serialize(v, serializer)
+            serializer.serialize_str(&v.join(" "))
         } else {
             serializer.serialize_none()
         }
@@ -848,38 +911,12 @@ mod optional_space_separated {
     where
         D: Deserializer<'de>,
     {
-        match space_separated::deserialize(deserializer) {
-            Ok(v) => Ok(Some(v)),
-            Err(_) => Ok(None),
-        }
-    }
-}
-
-mod semicolon_separated {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(value: &[String], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&value.join(";"))
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s: String = Deserialize::deserialize(deserializer)?;
-        Ok(if s.is_empty() {
-            vec![]
-        } else {
-            s.split(';').map(|s| s.trim().to_string()).collect()
-        })
+        deserialize_optional_delimited(deserializer, ' ')
     }
 }
 
 mod optional_semicolon_separated {
-    use super::semicolon_separated;
+    use super::deserialize_optional_delimited;
     use serde::{Deserializer, Serializer};
 
     pub fn serialize<S>(value: &Option<Vec<String>>, serializer: S) -> Result<S::Ok, S::Error>
@@ -887,7 +924,7 @@ mod optional_semicolon_separated {
         S: Serializer,
     {
         if let Some(v) = value {
-            semicolon_separated::serialize(v, serializer)
+            serializer.serialize_str(&v.join(";"))
         } else {
             serializer.serialize_none()
         }
@@ -897,10 +934,7 @@ mod optional_semicolon_separated {
     where
         D: Deserializer<'de>,
     {
-        match semicolon_separated::deserialize(deserializer) {
-            Ok(v) => Ok(Some(v)),
-            Err(_) => Ok(None),
-        }
+        deserialize_optional_delimited(deserializer, ';')
     }
 }
 
@@ -1092,6 +1126,17 @@ mod tests {
 
         let deserialized: Package = quick_xml::de::from_str(&serialized).unwrap();
         assert_eq!(deserialized, nuspec);
+
+        let spaced = "<package><metadata><id>a</id><version>1.0.0</version><description>d</description><authors>x</authors><tags>  tag1   tag2\n\ttag3  </tags></metadata></package>";
+        let deserialized: Package = quick_xml::de::from_str(spaced).unwrap();
+        assert_eq!(
+            deserialized.metadata.tags,
+            Some(vec![
+                "tag1".to_string(),
+                "tag2".to_string(),
+                "tag3".to_string()
+            ])
+        );
     }
 
     #[test]

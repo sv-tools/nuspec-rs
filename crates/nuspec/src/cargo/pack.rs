@@ -49,6 +49,7 @@ fn pack_at(
     for (_, dest) in &entries {
         let lower = dest.to_lowercase();
         if lower == "[content_types].xml"
+            || lower == ".signature.p7s"
             || lower.starts_with("_rels/")
             || lower.starts_with("package/")
             || (!lower.contains('/') && lower.ends_with(".nuspec"))
@@ -83,7 +84,7 @@ fn pack_at(
         );
 
         zip.start_file("_rels/.rels", options).map_err(zip_err)?;
-        write_str(&mut zip, &relationships(&nuspec_name, &psmdcp))?;
+        write_str(&mut zip, &partial, &relationships(&nuspec_name, &psmdcp))?;
 
         let nuspec = Package {
             files: None,
@@ -93,7 +94,7 @@ fn pack_at(
         .map_err(LayoutError::Write)?;
         zip.start_file(escape_part(&nuspec_name), options)
             .map_err(zip_err)?;
-        write_str(&mut zip, &nuspec)?;
+        write_str(&mut zip, &partial, &nuspec)?;
 
         let mut extensions = BTreeSet::from(["nuspec".to_string()]);
         let mut extensionless = Vec::new();
@@ -113,11 +114,15 @@ fn pack_at(
         }
 
         zip.start_file(psmdcp.as_str(), options).map_err(zip_err)?;
-        write_str(&mut zip, &core_properties(package))?;
+        write_str(&mut zip, &partial, &core_properties(package))?;
 
         zip.start_file("[Content_Types].xml", options)
             .map_err(zip_err)?;
-        write_str(&mut zip, &content_types(&extensions, &extensionless))?;
+        write_str(
+            &mut zip,
+            &partial,
+            &content_types(&extensions, &extensionless),
+        )?;
 
         let mut writer = zip.finish().map_err(zip_err)?;
         writer.flush().map_err(io_err(&partial))?;
@@ -136,11 +141,11 @@ fn pack_at(
     }
 }
 
-fn write_str<W: Write>(writer: &mut W, s: &str) -> Result<(), LayoutError> {
+fn write_str<W: Write>(writer: &mut W, path: &Path, s: &str) -> Result<(), LayoutError> {
     writer
         .write_all(s.as_bytes())
         .map_err(|source| LayoutError::Io {
-            path: PathBuf::new(),
+            path: path.to_path_buf(),
             source,
         })
 }
@@ -454,8 +459,10 @@ mod tests {
         let tmp = TempDir::new("errors");
         tmp.write("x.xml", "x");
         tmp.write("other.nuspec", "x");
+        tmp.write(".signature.p7s", "sig");
         for (src, target, reserved) in [
             ("x.xml", "[Content_Types].xml", "[Content_Types].xml"),
+            (".signature.p7s", "", ".signature.p7s"),
             ("x.xml", "_rels", "_rels/x.xml"),
             ("x.xml", "package/services", "package/services/x.xml"),
             ("other.nuspec", "", "other.nuspec"),
@@ -466,6 +473,18 @@ mod tests {
                 "{target}: {err}"
             );
         }
+
+        let err = pack_at(
+            &package(vec![file("x.xml", "../escape.xml")]),
+            &tmp.0,
+            &tmp.0,
+            0,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, LayoutError::UnsafePath(p) if p == "../escape.xml"),
+            "{err}"
+        );
 
         let mut invalid = package(vec![]);
         invalid.metadata.version = String::new();
