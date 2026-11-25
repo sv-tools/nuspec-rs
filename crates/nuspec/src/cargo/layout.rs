@@ -44,7 +44,7 @@ pub enum LayoutError {
     /// The packages given to [`merge`](super::merge) cannot be merged, or a `.nupkg` has no
     /// `.nuspec`.
     Mismatch(String),
-    /// A `.nupkg` contains a path that would be extracted outside the target directory.
+    /// A package contains a path that would escape the target directory.
     UnsafePath(String),
 }
 
@@ -68,10 +68,7 @@ impl fmt::Display for LayoutError {
             LayoutError::Read { path, source } => write!(f, "{}: {source}", path.display()),
             LayoutError::Mismatch(message) => write!(f, "{message}"),
             LayoutError::UnsafePath(path) => {
-                write!(
-                    f,
-                    "{path:?} would be extracted outside the target directory"
-                )
+                write!(f, "{path:?} would escape the target directory")
             }
         }
     }
@@ -93,6 +90,9 @@ pub(super) fn resolve(
     let mut seen: HashMap<String, PathBuf> = HashMap::new();
     for file in package.files.iter().flat_map(|f| f.file.iter()) {
         for (source, dest) in expand(file, base)? {
+            if !is_safe(&dest) {
+                return Err(LayoutError::UnsafePath(dest));
+            }
             match seen.get(&dest.to_lowercase()) {
                 Some(existing) if *existing == source => continue,
                 Some(_) => return Err(LayoutError::Conflict(dest)),
@@ -201,6 +201,20 @@ pub(super) fn file_destination(src: &Path, raw_target: &str) -> String {
     } else {
         join(&target, &name)
     }
+}
+
+/// A path inside a package that stays inside the extraction or staging directory.
+pub(super) fn is_safe(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains(['\\', ':', '\0'])
+        && name
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+}
+
+/// A single path segment (such as a package id used as a filename) that stays inside its directory.
+pub(super) fn is_safe_file_name(name: &str) -> bool {
+    is_safe(name) && !name.contains('/')
 }
 
 pub(super) fn has_wildcard(s: &str) -> bool {
