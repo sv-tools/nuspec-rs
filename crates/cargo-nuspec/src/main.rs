@@ -5,8 +5,8 @@
 use anyhow::{Context, Result, bail};
 use cargo_metadata::camino::Utf8Path;
 use cargo_metadata::{Artifact, Message, Metadata, MetadataCommand, Package};
-use clap::{Args, Parser};
-use nuspec::cargo::{Config, pack, packages, rid_for_target, stage};
+use clap::{Args, Parser, Subcommand};
+use nuspec::cargo::{Config, merge, pack, packages, rid_for_target, stage, unpack};
 use std::ffi::OsString;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -25,8 +25,11 @@ enum Cli {
 /// `[package.metadata.nuspec]`: a native package for a `cdylib`, an app package for binaries.
 /// The paths of the written `.nuspec` and `.nupkg` files are printed to stdout.
 #[derive(Debug, Default, Args)]
-#[command(version)]
+#[command(version, args_conflicts_with_subcommands = true)]
 struct NuspecArgs {
+    #[command(subcommand)]
+    command: Option<NuspecCommand>,
+
     /// Package(s) to build and package
     #[arg(short, long = "package", value_name = "SPEC")]
     packages: Vec<String>,
@@ -102,9 +105,41 @@ struct NuspecArgs {
     cargo_args: Vec<String>,
 }
 
+#[derive(Debug, Subcommand)]
+enum NuspecCommand {
+    Merge(MergeArgs),
+}
+
+/// Merge the packages built on each platform into one package for every platform.
+///
+/// The packages must have the same id, version and metadata, as the native packages
+/// `cargo nuspec` builds on each platform do: their `runtimes/<rid>/native/` folders are
+/// combined. Files present in several packages, such as the readme, must be identical
+/// (line endings aside).
+/// Writes the merged package staged in `<out-dir>/<id>/`, and with `--pack` also the `.nupkg`.
+#[derive(Debug, Args)]
+struct MergeArgs {
+    /// Packages to merge: `.nupkg` files, `.nuspec` files, or directories staged by
+    /// `cargo nuspec --stage` (with a single `.nuspec`)
+    #[arg(required = true, value_name = "PACKAGE")]
+    inputs: Vec<PathBuf>,
+
+    /// Directory for the merged package
+    #[arg(long, value_name = "DIR")]
+    out_dir: PathBuf,
+
+    /// Also write the `.nupkg` package
+    #[arg(long)]
+    pack: bool,
+}
+
 fn main() {
     let Cli::Nuspec(args) = Cli::parse();
-    if let Err(err) = run(&args) {
+    let result = match &args.command {
+        Some(NuspecCommand::Merge(merge)) => run_merge(merge),
+        None => run(&args),
+    };
+    if let Err(err) = result {
         eprintln!("error: {err:#}");
         std::process::exit(1);
     }
@@ -183,6 +218,105 @@ fn run(args: &NuspecArgs) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn run_merge(args: &MergeArgs) -> Result<()> {
+    let temp = TempDir::new()?;
+    let mut inputs = Vec::new();
+    for (index, input) in args.inputs.iter().enumerate() {
+        let package = read_input(input, &temp.0.join(index.to_string()))
+            .with_context(|| format!("failed to read {}", input.display()))?;
+        inputs.push(package);
+    }
+    let merged = merge(&inputs).context("failed to merge")?;
+    let id = merged.metadata.id.clone();
+    let dir = args.out_dir.join(&id);
+    // Staging into one of the inputs would overwrite the files being read.
+    if let Ok(target) = dir.canonicalize() {
+        for (_, base) in &inputs {
+            if base.canonicalize().is_ok_and(|base| base == target) {
+                bail!(
+                    "{} is one of the packages to merge; choose another --out-dir",
+                    dir.display()
+                );
+            }
+        }
+    }
+    let (staged, nuspec) = stage(&merged, &dir).with_context(|| format!("failed to stage {id}"))?;
+    report("Merged", &nuspec);
+    if args.pack {
+        let nupkg =
+            pack(&staged, &dir, &args.out_dir).with_context(|| format!("failed to pack {id}"))?;
+        report("Packed", &nupkg);
+    }
+    Ok(())
+}
+
+/// Reads a package to merge and the directory its relative paths are resolved against. A
+/// `.nupkg` is extracted into `temp`.
+fn read_input(path: &Path, temp: &Path) -> Result<(nuspec::Package, PathBuf)> {
+    let nuspec = if path.is_dir() {
+        let mut found = Vec::new();
+        for entry in fs::read_dir(path)? {
+            let entry = entry?.path();
+            if entry
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("nuspec"))
+            {
+                found.push(entry);
+            }
+        }
+        match <[PathBuf; 1]>::try_from(found) {
+            Ok([nuspec]) => nuspec,
+            Err(found) => bail!(
+                "expected one .nuspec in the directory, found {}",
+                found.len()
+            ),
+        }
+    } else {
+        path.to_path_buf()
+    };
+    let extension = nuspec
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase());
+    match extension.as_deref() {
+        Some("nupkg") => {
+            let (package, _) = unpack(&nuspec, temp)?;
+            Ok((package, temp.to_path_buf()))
+        }
+        Some("nuspec") => {
+            let xml = fs::read_to_string(&nuspec)?;
+            let package = nuspec::Package::from_xml(&xml)?;
+            let base = nuspec
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            Ok((package, base.to_path_buf()))
+        }
+        _ => bail!("expected a .nupkg, a .nuspec or a staged directory"),
+    }
+}
+
+/// A temporary directory, removed when dropped.
+#[derive(Debug)]
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new() -> Result<Self> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let path = env::temp_dir().join(format!("cargo-nuspec-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&path)
+            .with_context(|| format!("failed to create {}", path.display()))?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 fn report(status: &str, path: &Path) {
@@ -402,6 +536,72 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "package `serde` is not a member of the workspace"
+        );
+    }
+
+    #[test]
+    fn test_merge_args() {
+        let args = parse(&["merge", "--out-dir", "out", "--pack", "a.nupkg", "b"]);
+        let Some(NuspecCommand::Merge(merge)) = args.command else {
+            panic!("expected merge");
+        };
+        assert_eq!(merge.inputs, [PathBuf::from("a.nupkg"), PathBuf::from("b")]);
+        assert_eq!(merge.out_dir, PathBuf::from("out"));
+        assert!(merge.pack);
+        assert!(Cli::try_parse_from(["cargo", "nuspec", "merge", "--out-dir", "out"]).is_err());
+        assert!(Cli::try_parse_from(["cargo", "nuspec", "merge", "a.nupkg"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "cargo",
+                "nuspec",
+                "--release",
+                "merge",
+                "--out-dir",
+                "o",
+                "a"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_read_input() {
+        let temp = TempDir::new().unwrap();
+        let dir = temp.0.join("staged");
+        fs::create_dir_all(&dir).unwrap();
+        let package = nuspec::Package {
+            metadata: nuspec::Metadata {
+                id: "Demo".to_string(),
+                version: "1.0.0".to_string(),
+                description: "d".to_string(),
+                authors: vec!["a".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let err = read_input(&dir, &temp.0.join("x")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "expected one .nuspec in the directory, found 0"
+        );
+
+        let nuspec = dir.join("Demo.nuspec");
+        fs::write(&nuspec, package.to_xml().unwrap()).unwrap();
+        let (read, base) = read_input(&nuspec, &temp.0.join("x")).unwrap();
+        assert_eq!((read.metadata.id.as_str(), base), ("Demo", dir.clone()));
+        let (_, base) = read_input(&dir, &temp.0.join("x")).unwrap();
+        assert_eq!(base, dir);
+
+        fs::write(dir.join("Other.nuspec"), "").unwrap();
+        let err = read_input(&dir, &temp.0.join("x")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "expected one .nuspec in the directory, found 2"
+        );
+        let err = read_input(&dir.join("Demo.txt"), &temp.0.join("x")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "expected a .nupkg, a .nuspec or a staged directory"
         );
     }
 

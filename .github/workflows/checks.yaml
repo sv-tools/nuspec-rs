@@ -347,17 +347,77 @@ jobs:
           path: |
             dist/*.nupkg
             nuget-pack/*.nupkg
+  NuGetMergeJob:
+    name: Merge the NuGet packages of every platform
+    # `cargo nuspec merge` on the native packages built by `NuGetJob` on each OS: one package
+    # with the library of every platform in its `runtimes/<rid>/native/`.
+    needs: NuGetJob
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: nuspec-test-*-nuget
+          path: artifacts
+      - name: Merge the native packages
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "nuspec-test") | .version')
+          cargo run --package cargo-nuspec -- nuspec merge --pack --out-dir merged \
+            artifacts/*/dist/nuspec-test."$version".nupkg
+          unzip -l merged/nuspec-test."$version".nupkg
+          rids=$(unzip -Z1 merged/nuspec-test."$version".nupkg | grep -c '^runtimes/.*/native/')
+          if [[ "$rids" -ne 3 ]]; then
+            echo "::error::expected a native library for 3 platforms, found $rids"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nuspec-test-merged-nuget
+          path: merged/*.nupkg
+          if-no-files-found: error
+  NuGetMergedJob:
+    name: Consume the merged NuGet package
+    needs: NuGetMergeJob
+    strategy:
+      matrix:
+        os: [ "ubuntu-latest", "windows-latest", "macos-latest" ]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: nuspec-test-merged-nuget
+          path: merged
+      - name: Call the native library from .NET
+        shell: bash
+        working-directory: crates/nuspec-test/dotnet
+        run: |
+          set -euo pipefail
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "nuspec-test") | .version')
+          dotnet restore --source "$GITHUB_WORKSPACE/merged" -p:NuspecTestVersion="$version"
+          output=$(dotnet run --no-restore -p:NuspecTestVersion="$version")
+          echo "$output"
+          grep -qF "Hello from Rust!" <<<"$output"
   Publish:
     name: Wait for publishing jobs to finish
     needs:
       - RustMeta
       - PublishCrateJob
       - NuGetJob
+      - NuGetMergedJob
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
       - name: Check status
-        if: ${{ needs.NuGetJob.result != 'success' || (needs.RustMeta.outputs.publish != '[]' && needs.PublishCrateJob.result != 'success') }}
+        if: ${{ needs.NuGetJob.result != 'success' || needs.NuGetMergedJob.result != 'success' || (needs.RustMeta.outputs.publish != '[]' && needs.PublishCrateJob.result != 'success') }}
         run: exit 1
   AllChecks:
     name: All checks

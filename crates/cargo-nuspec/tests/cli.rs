@@ -177,3 +177,94 @@ fn stage_and_pack() {
     drop(bin);
     assert!(app.by_name("LICENSE-MIT").is_ok());
 }
+
+#[test]
+fn merge_platforms() {
+    let out = out_dir("merge");
+    let version = env!("CARGO_PKG_VERSION");
+    // The same build packaged for two runtime identifiers stands in for two platforms.
+    let x64 = out.join("x64");
+    let arm64 = out.join("arm64");
+    let native = |dir: &Path, rid: &str| {
+        let written = cargo_nuspec(&[
+            "--rid",
+            rid,
+            "--stage",
+            "--pack",
+            "--out-dir",
+            dir.to_str().unwrap(),
+        ]);
+        assert_eq!(written[0], dir.join("nuspec-test/nuspec-test.nuspec"));
+        assert_eq!(written[1], dir.join(format!("nuspec-test.{version}.nupkg")));
+    };
+    native(&x64, "linux-x64");
+    native(&arm64, "linux-arm64");
+
+    // A packed and a staged package; the shared readme and licenses are kept once.
+    let merged = out.join("merged");
+    let written = cargo_nuspec_merge(&[
+        x64.join(format!("nuspec-test.{version}.nupkg"))
+            .to_str()
+            .unwrap(),
+        arm64.join("nuspec-test").to_str().unwrap(),
+        "--pack",
+        "--out-dir",
+        merged.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        written,
+        [
+            merged.join("nuspec-test/nuspec-test.nuspec"),
+            merged.join(format!("nuspec-test.{version}.nupkg")),
+        ]
+    );
+    let library = native_library();
+    assert_eq!(
+        targets(&read(&written[0])),
+        [
+            "LICENSE-APACHE".to_string(),
+            "LICENSE-MIT".to_string(),
+            "README.md".to_string(),
+            format!("runtimes/linux-arm64/native/{library}"),
+            format!("runtimes/linux-x64/native/{library}"),
+        ]
+    );
+    let mut archive = zip::ZipArchive::new(fs::File::open(&written[1]).unwrap()).unwrap();
+    for rid in ["linux-x64", "linux-arm64"] {
+        assert!(
+            archive
+                .by_name(&format!("runtimes/{rid}/native/{library}"))
+                .is_ok()
+        );
+    }
+
+    // App packages have the runtime identifier in their id.
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-nuspec"))
+        .args(["nuspec", "merge", "--out-dir"])
+        .arg(out.join("apps"))
+        .arg(x64.join("nuspec-test.linux-x64"))
+        .arg(arm64.join("nuspec-test.linux-arm64"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("same id and version"), "{stderr}");
+}
+
+fn cargo_nuspec_merge(args: &[&str]) -> Vec<PathBuf> {
+    let output = Command::new(env!("CARGO_BIN_EXE_cargo-nuspec"))
+        .args(["nuspec", "merge"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "cargo nuspec merge failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(PathBuf::from)
+        .collect()
+}

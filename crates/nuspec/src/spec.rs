@@ -697,6 +697,7 @@ pub enum BuildAction {
 #[serde(deny_unknown_fields)]
 pub struct Files {
     /// A collection of files included in the package.
+    #[serde(default)]
     pub file: Vec<File>,
 }
 
@@ -1289,6 +1290,14 @@ mod tests {
         let references = deserialized.metadata.references.as_ref().unwrap();
         assert!(references.group.as_ref().unwrap()[0].reference.is_empty());
 
+        assert_eq!(quick_xml::se::to_string(&deserialized).unwrap(), serialized);
+    }
+
+    #[test]
+    fn test_empty_files() {
+        let serialized = r#"<package><metadata><id>a</id><version>1.0.0</version><description>d</description><authors>x</authors></metadata><files/></package>"#;
+        let deserialized: Package = quick_xml::de::from_str(serialized).unwrap();
+        assert_eq!(deserialized.files, Some(Files::default()));
         assert_eq!(quick_xml::se::to_string(&deserialized).unwrap(), serialized);
     }
 

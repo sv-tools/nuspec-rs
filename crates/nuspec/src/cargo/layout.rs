@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::{error, fmt, io};
 
-/// An error laying out the files of a package, by [`stage`](super::stage) or [`pack`](super::pack).
+/// An error laying out the files of a package, by [`stage`](super::stage), [`pack`](super::pack),
+/// [`merge`](super::merge) or [`unpack`](super::unpack).
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum LayoutError {
@@ -33,6 +34,18 @@ pub enum LayoutError {
     Zip(zip::result::ZipError),
     /// The package failed [`Package::validate`](crate::Package::validate).
     Invalid(crate::ValidationErrors),
+    /// Reading the `.nuspec` of a `.nupkg` failed.
+    Read {
+        /// The `.nupkg`.
+        path: PathBuf,
+        /// The parse error.
+        source: crate::Error,
+    },
+    /// The packages given to [`merge`](super::merge) cannot be merged, or a `.nupkg` has no
+    /// `.nuspec`.
+    Mismatch(String),
+    /// A `.nupkg` contains a path that would be extracted outside the target directory.
+    UnsafePath(String),
 }
 
 impl fmt::Display for LayoutError {
@@ -52,22 +65,21 @@ impl fmt::Display for LayoutError {
             LayoutError::Write(e) => write!(f, "{e}"),
             LayoutError::Zip(e) => write!(f, "failed to write the package: {e}"),
             LayoutError::Invalid(e) => write!(f, "{e}"),
+            LayoutError::Read { path, source } => write!(f, "{}: {source}", path.display()),
+            LayoutError::Mismatch(message) => write!(f, "{message}"),
+            LayoutError::UnsafePath(path) => {
+                write!(
+                    f,
+                    "{path:?} would be extracted outside the target directory"
+                )
+            }
         }
     }
 }
 
-impl error::Error for LayoutError {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            LayoutError::Io { source, .. } => Some(source),
-            LayoutError::Pattern { source, .. } => Some(source),
-            LayoutError::Write(e) => Some(e),
-            LayoutError::Zip(e) => Some(e),
-            LayoutError::Invalid(e) => Some(e),
-            _ => None,
-        }
-    }
-}
+// The messages include the underlying errors, so they are not also reported as sources:
+// error reporters that print the chain would show them twice.
+impl error::Error for LayoutError {}
 
 /// Resolves every `<file>` of `package` into `(source path, path inside the package)` pairs,
 /// in order. Relative `src` paths are resolved against `base`, as `nuget pack` resolves them

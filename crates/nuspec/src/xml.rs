@@ -26,15 +26,9 @@ impl fmt::Display for Error {
     }
 }
 
-impl error::Error for Error {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match self {
-            Error::Deserialize(e) => Some(e),
-            Error::Serialize(e) => Some(e),
-            Error::Io(e) => Some(e),
-        }
-    }
-}
+// The messages include the underlying errors, so they are not also reported as sources:
+// error reporters that print the chain would show them twice.
+impl error::Error for Error {}
 
 impl From<quick_xml::DeError> for Error {
     fn from(e: quick_xml::DeError) -> Self {
