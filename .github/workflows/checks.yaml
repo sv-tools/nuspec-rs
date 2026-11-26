@@ -94,9 +94,12 @@ jobs:
   Build:
     name: Wait for build jobs to finish
     needs: [BuildJob, IsolatedBuildJob, MSRV]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Build jobs succeeded"
+      - name: Verify build jobs succeeded
+        if: ${{ needs.BuildJob.result != 'success' || needs.IsolatedBuildJob.result != 'success' || needs.MSRV.result != 'success' }}
+        run: exit 1
   Format:
     name: Check Rust code formatting
     runs-on: ubuntu-latest
@@ -201,9 +204,12 @@ jobs:
   Tests:
     name: Wait for testing jobs to finish
     needs: [TestJob]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Testing jobs succeeded"
+      - name: Verify testing jobs succeeded
+        if: ${{ needs.TestJob.result != 'success' }}
+        run: exit 1
   Deps:
     name: Check dependencies
     runs-on: ubuntu-latest
@@ -417,7 +423,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check status
-        if: ${{ needs.NuGetJob.result != 'success' || needs.NuGetMergedJob.result != 'success' || (needs.RustMeta.outputs.publish != '[]' && needs.PublishCrateJob.result != 'success') }}
+        if: ${{ needs.RustMeta.result != 'success' || needs.NuGetJob.result != 'success' || needs.NuGetMergedJob.result != 'success' || (needs.RustMeta.outputs.publish != '[]' && needs.PublishCrateJob.result != 'success') }}
         run: exit 1
   AllChecks:
     name: All checks
@@ -434,8 +440,22 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      # Exactly one of `OsvScannerPR` / `OsvScanner` is skipped per event, so
-      # a `skipped` result is expected here.
+      # Exactly one of `OsvScannerPR` / `OsvScanner` is intentionally
+      # skipped per event (PR vs non-PR). Check every required job for
+      # `== 'success'` explicitly — checking only `failure` / `cancelled`
+      # silently passes whenever an upstream failure causes a dependent
+      # job (such as `Build` or `Tests`) to be `skipped`.
       - name: Verify all checks succeeded
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        if: >-
+          ${{
+          needs.Build.result != 'success' ||
+          needs.Format.result != 'success' ||
+          needs.Clippy.result != 'success' ||
+          needs.Docs.result != 'success' ||
+          needs.Tests.result != 'success' ||
+          needs.Deps.result != 'success' ||
+          needs.Publish.result != 'success' ||
+          (github.event_name == 'pull_request' && needs.OsvScannerPR.result != 'success') ||
+          (github.event_name != 'pull_request' && needs.OsvScanner.result != 'success')
+          }}
         run: exit 1
